@@ -7,15 +7,17 @@
 /// Carries the event type, originating monitor/check, the triggering
 /// result, and the previous status for context.
 sealed Value subclass: MonitorEvent
-  field: type = #unknown  // #alert | #recovered
-  field: monitor = nil
-  field: check = nil
-  field: result = nil
-  field: previousStatus = #unknown
-  field: timestamp = nil
+  field: type :: Symbol = #unknown  // #alert | #recovered
+  field: monitor = nil  // Actor — type omitted because nil default is not assignable to Actor
+  field: check = nil  // HealthCheck implementor — type omitted because nil default is not assignable
+  field: result = nil  // CheckResult — type omitted because nil default is not assignable
+  field: previousStatus :: Symbol = #unknown
+  field: timestamp = nil  // DateTime — type omitted because nil default is not assignable
 
   /// Factory — auto-stamps timestamp with DateTime now.
-  class type: t monitor: m check: c result: r previousStatus: ps =>
+  /// Note: monitor/check/result parameters are untyped because callers
+  /// (and tests) may pass nil, which is not assignable to Actor/CheckResult.
+  class type: t :: Symbol monitor: m check: c result: r previousStatus: ps :: Symbol -> MonitorEvent =>
     self
       new: #{
         #type => t,
@@ -27,7 +29,7 @@ sealed Value subclass: MonitorEvent
       }
 
   /// Predicate — true when this event represents an alert.
-  isAlert => self.type == #alert
+  isAlert -> Boolean => self.type == #alert
 
   /// Predicate — true when this event represents a recovery.
-  isRecovery => self.type == #recovered
+  isRecovery -> Boolean => self.type == #recovered
