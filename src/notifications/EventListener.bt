@@ -1,0 +1,20 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+/// EventListener — protocol for actors that consume `MonitorEvent`s from
+/// a `Monitor`.
+///
+/// In production the only implementor is `NotificationRouter`, which
+/// applies dedup and fans events out to webhook channels. Tests inject
+/// recording stubs that conform to the same interface so they can assert
+/// on what the Monitor emitted.
+///
+/// Implementations should treat `handleEvent:` as fire-and-forget: the
+/// Monitor sends events via `!` (cast) so it never blocks on a slow
+/// listener. The return type is `Object` (rather than `Nil`) to keep the
+/// signature flexible — `NotificationRouter` returns a `Boolean` that
+/// indicates whether the event was forwarded or deduped.
+///
+/// See SPEC.md §3 (Monitor) and §5 (NotificationRouter).
+Protocol define: EventListener
+  /// Receive a MonitorEvent for handling (routing, logging, alerting).
+  handleEvent: event :: MonitorEvent -> Object

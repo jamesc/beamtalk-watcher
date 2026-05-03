@@ -1,0 +1,41 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Stub HealthCheck used by MonitorTest.
+///
+/// Returns a scripted sequence of CheckResults — one per call to `check`,
+/// in the order supplied. Once the script is exhausted, every subsequent
+/// call returns the last scripted result (so tests don't have to perfectly
+/// size the script). Tracks how many times `check` has been invoked.
+///
+/// The actor wrapper lets the Monitor's `self.check check` work uniformly
+/// while letting tests query/mutate the script after spawn.
+typed Actor subclass: ScriptedHealthCheck
+  state: name :: String = "scripted"
+  state: target :: String = "scripted-target"
+  state: results :: List(CheckResult) = #()
+  state: callCount :: Integer = 0
+
+  /// Spawn a check that returns `name` and replays `aList` of CheckResults.
+  class named: aName :: String results: aList :: List(CheckResult) -> ScriptedHealthCheck =>
+    self spawnWith: #{#name => aName, #results => aList}
+
+  /// Run the check — returns the next scripted result. After the script
+  /// is exhausted, repeats the final scripted entry.
+  check -> CheckResult =>
+    self.callCount := self.callCount + 1
+    self.results size == 0 ifTrue: [
+      ^CheckResult fail: self.name details: "no scripted result"
+    ]
+    self.callCount > self.results size ifTrue: [
+      self.results last
+    ] ifFalse: [self.results at: self.callCount]
+
+  /// HealthCheck protocol — name accessor.
+  name -> String => self.name
+
+  /// HealthCheck protocol — target accessor.
+  target -> String => self.target
+
+  /// Number of times `check` has been called so far.
+  callCount -> Integer => self.callCount

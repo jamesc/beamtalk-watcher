@@ -1,0 +1,28 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Stub listener actor used by MonitorTest.
+///
+/// Records every MonitorEvent delivered via `handleEvent:` so tests can
+/// assert on emitted alerts and recoveries. Provides `events` (oldest
+/// first), `count`, and convenience filters (`alerts`, `recoveries`).
+typed Actor subclass: RecordingListener
+  state: events :: List(MonitorEvent) = #()
+
+  /// Record an incoming MonitorEvent (EventListener protocol).
+  handleEvent: event :: MonitorEvent -> List(MonitorEvent) =>
+    self.events := self.events add: event
+    self.events
+
+  /// All events recorded so far (oldest first).
+  events -> List(MonitorEvent) => self.events
+
+  /// Number of events recorded so far.
+  count -> Integer => self.events size
+
+  /// All recorded events whose `type` is `#alert`.
+  alerts -> List(MonitorEvent) => self.events select: [:e | e type == #alert]
+
+  /// All recorded events whose `type` is `#recovered`.
+  recoveries -> List(MonitorEvent) =>
+    self.events select: [:e | e type == #recovered]
