@@ -1,0 +1,16 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Stub HealthCheck used by NotificationRouterTest.
+///
+/// MonitorEvent dedup keys off `event check name`, so tests need a simple
+/// object that answers `name`. A plain Value with a `name` field is enough
+/// — no need for the full HealthCheck protocol here.
+sealed typed Value subclass: NamedCheck
+  field: name :: String = ""
+
+  /// Build a NamedCheck with the given name.
+  class named: aName :: String -> NamedCheck => self new: #{#name => aName}
+
+  /// The check name (matches HealthCheck protocol).
+  name -> String => self.name

@@ -1,0 +1,20 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Stub channel actor used by NotificationRouterTest.
+///
+/// Records every event delivered via `deliver:` so tests can assert on
+/// fan-out behaviour. Provides `received` (List of events) and `count`.
+typed Actor subclass: RecordingChannel
+  state: events :: List = #()
+
+  /// Record an incoming event.
+  deliver: event :: MonitorEvent -> List =>
+    self.events := self.events add: event
+    self.events
+
+  /// All events recorded so far (oldest first).
+  received -> List => self.events
+
+  /// Number of events recorded so far.
+  count -> Integer => self.events size

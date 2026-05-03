@@ -1,0 +1,127 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for NotificationRouter (BT-2124).
+///
+/// Covers: channel registration, single-event fan-out across channels,
+/// duplicate suppression within the 60-second window, distinction between
+/// event types for the same check (alert vs recovery), and per-check
+/// dedup independence.
+TestCase subclass: NotificationRouterTest
+
+  /// Build an event for a given check name and type. Each call stamps a
+  /// fresh `DateTime now`.
+  makeEvent: checkName :: String type: t :: Symbol -> MonitorEvent =>
+    MonitorEvent
+      type: t
+      monitor: nil
+      check: (NamedCheck named: checkName)
+      result: nil
+      previousStatus: #unknown
+
+  // --- Channel registration ---
+  testAddChannelRegistersIt =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    self assert: router channels size equals: 1
+
+  testRemoveChannelDropsIt =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router removeChannel: ch
+    self assert: router channels size equals: 0
+
+  // --- Single event fans out to all channels ---
+  testSingleEventDeliveredToAllChannels =>
+    router := NotificationRouter spawn
+    a := RecordingChannel spawn
+    b := RecordingChannel spawn
+    c := RecordingChannel spawn
+    router addChannel: a
+    router addChannel: b
+    router addChannel: c
+    event := self makeEvent: "http-api" type: #alert
+    self assert: (router handleEvent: event)
+    // Sync barrier: read state to force prior casts to drain.
+    self assert: a count equals: 1
+    self assert: b count equals: 1
+    self assert: c count equals: 1
+
+  // --- Duplicate within window suppressed ---
+  testDuplicateWithinWindowSuppressed =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    e1 := self makeEvent: "http-api" type: #alert
+    e2 := self makeEvent: "http-api" type: #alert
+    self assert: (router handleEvent: e1)
+    self deny: (router handleEvent: e2)
+    self assert: ch count equals: 1
+    self assert: router recentEvents size equals: 1
+
+  // --- Same check, different type is NOT deduped ---
+  testSameCheckDifferentTypeNotDeduped =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    alert := self makeEvent: "http-api" type: #alert
+    recovery := self makeEvent: "http-api" type: #recovered
+    self assert: (router handleEvent: alert)
+    self assert: (router handleEvent: recovery)
+    self assert: ch count equals: 2
+
+  // --- Recovery dedup is independent from alert dedup ---
+  testRecoveryAndAlertDedupIndependently =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    alert1 := self makeEvent: "http-api" type: #alert
+    recovery1 := self makeEvent: "http-api" type: #recovered
+    alert2 := self makeEvent: "http-api" type: #alert
+    recovery2 := self makeEvent: "http-api" type: #recovered
+    self assert: (router handleEvent: alert1)
+    self assert: (router handleEvent: recovery1)
+    self deny: (router handleEvent: alert2)
+    self deny: (router handleEvent: recovery2)
+    self assert: ch count equals: 2
+
+  // --- Different checks do not dedup against each other ---
+  testDifferentCheckNamesNotDeduped =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    e1 := self makeEvent: "api-a" type: #alert
+    e2 := self makeEvent: "api-b" type: #alert
+    self assert: (router handleEvent: e1)
+    self assert: (router handleEvent: e2)
+    self assert: ch count equals: 2
+
+  // --- Dedup buffer is bounded ---
+  testRecentEventsCappedAt100 =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    // Fan out 110 unique events (different check names => no dedup).
+    1
+      to: 110
+      do: [:i |
+        e := self makeEvent: "check-{i}" type: #alert
+        router handleEvent: e
+      ]
+    self assert: router recentEvents size equals: 100
+    self assert: ch count equals: 110
+
+  // --- After remove, no new events delivered to that channel ---
+  testRemovedChannelReceivesNothing =>
+    router := NotificationRouter spawn
+    a := RecordingChannel spawn
+    b := RecordingChannel spawn
+    router addChannel: a
+    router addChannel: b
+    router removeChannel: a
+    e := self makeEvent: "http-api" type: #alert
+    router handleEvent: e
+    self assert: a count equals: 0
+    self assert: b count equals: 1
