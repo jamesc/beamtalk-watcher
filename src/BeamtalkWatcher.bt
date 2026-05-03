@@ -1,0 +1,8 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// BeamtalkWatcher — main class for the beamtalk_watcher library.
+Object subclass: BeamtalkWatcher
+
+  /// Return a greeting string.
+  class greet => "Hello from beamtalk_watcher!"
