@@ -1,0 +1,92 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the WebhookReceiver actor (BT-2127).
+///
+/// Each test spawns an `AlertLog`, starts a `WebhookReceiver` on an
+/// ephemeral port (port 0), drives it with `HTTPClient`, and asserts on
+/// both the HTTP response and the AlertLog state. The receiver is shut
+/// down in `tearDown` so ports/processes do not leak between tests.
+TestCase subclass: WebhookReceiverTest
+  field: log :: AlertLog | nil = nil
+  field: receiver :: WebhookReceiver | nil = nil
+
+  setUp =>
+    log :: AlertLog := AlertLog spawn
+    self.log := log
+    self.receiver := WebhookReceiver start: 0 alertLog: log
+
+  tearDown =>
+    self.receiver isNil ifFalse: [self.receiver shutdown]
+    self.receiver := nil
+    self.log := nil
+
+  /// Build the base URL of the running receiver.
+  baseUrl -> String => "http://localhost:" ++ self.receiver port printString
+
+  /// Build a JSON-encoded webhook payload acceptable to `Alert fromWebhook:`.
+  samplePayload -> String =>
+    Json
+      generate: #{
+        "type" => "alert",
+        "check" => "api",
+        "target" => "https://api.example.com",
+        "status" => "fail",
+        "details" => "503 Service Unavailable",
+        "previousStatus" => "ok",
+        "timestamp" => "2026-05-03T10:00:00Z"
+      }
+
+  // --- Ephemeral port wiring ---
+  testPortIsAssigned => self assert: self.receiver port > 0
+
+  // --- POST /webhook (valid JSON) ---
+  testValidWebhookReturns202 =>
+    url := self baseUrl ++ "/webhook"
+    resp := (HTTPClient post: url body: self samplePayload) unwrap
+    self assert: resp status equals: 202
+
+  testValidWebhookBodyAcceptedFlag =>
+    url := self baseUrl ++ "/webhook"
+    resp := (HTTPClient post: url body: self samplePayload) unwrap
+    parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
+    self assert: (parsed at: "accepted")
+
+  testValidWebhookRecordsAlertInLog =>
+    url := self baseUrl ++ "/webhook"
+    (HTTPClient post: url body: self samplePayload) unwrap
+    self assert: self.log count equals: 1
+    recent :: List(Alert) := self.log recent: 1
+    alert :: Alert := recent at: 1
+    self assert: alert checkName equals: "api"
+    self assert: alert type equals: "alert"
+    self assert: alert status equals: "fail"
+
+  // --- POST /webhook (invalid JSON) ---
+  testInvalidJsonReturns400 =>
+    url := self baseUrl ++ "/webhook"
+    resp := (HTTPClient post: url body: "not json at all") unwrap
+    self assert: resp status equals: 400
+
+  testInvalidJsonErrorBody =>
+    url := self baseUrl ++ "/webhook"
+    resp := (HTTPClient post: url body: "\{ broken") unwrap
+    parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
+    self assert: (parsed at: "error") equals: "invalid JSON"
+
+  testInvalidJsonLeavesAlertLogUnchanged =>
+    url := self baseUrl ++ "/webhook"
+    (HTTPClient post: url body: "garbage") unwrap
+    self assert: self.log count equals: 0
+
+  // --- GET /health ---
+  testHealthReturns200 =>
+    url := self baseUrl ++ "/health"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+
+  testHealthBodyShape =>
+    url := self baseUrl ++ "/health"
+    resp := (HTTPClient get: url) unwrap
+    parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
+    self assert: (parsed at: "status") equals: "ok"

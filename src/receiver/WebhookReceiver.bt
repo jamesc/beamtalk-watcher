@@ -1,0 +1,77 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// WebhookReceiver — Actor running an HTTPServer that accepts incoming
+/// webhook POSTs and forwards parsed Alerts to an AlertLog.
+///
+/// See SPEC.md section 7.
+///
+/// Routes:
+///   * `POST /webhook` — parse JSON body and record as `Alert`. Responds
+///     with `202 {"accepted":true}` on success and
+///     `400 {"error":"invalid JSON"}` when the body is not valid JSON.
+///   * `GET /health` — liveness check returning `200 {"status":"ok"}`.
+///
+/// The receiver is started with `start: aPort alertLog: anAlertLog`. Use
+/// port `0` to bind an ephemeral OS-assigned port and read the resolved
+/// value via the `port` accessor (e.g. in tests).
+typed Actor subclass: WebhookReceiver
+  state: server :: HTTPServer | nil = nil
+  state: alertLog :: AlertLog | nil = nil
+  state: port :: Integer = 0
+
+  /// Spawn a WebhookReceiver bound to `aPort` and start its HTTP server.
+  ///
+  /// Returns the spawned receiver actor. Use `aPort = 0` for an ephemeral
+  /// port; the resolved port is then available via `receiver port`.
+  class start: aPort :: Integer alertLog: anAlertLog :: AlertLog -> WebhookReceiver =>
+    receiver := self spawnWith: #{#port => aPort, #alertLog => anAlertLog}
+    router := HTTPRouter
+      build: [:r |
+        @expect type
+        r post: "/webhook" handler: [:req | receiver handleWebhook: req]
+        @expect type
+        r get: "/health" handler: [:req |
+          HTTPResponse new: #{#status => 200, #body => "\{""status"":""ok""}"}
+        ]
+      ]
+    receiver startServer: router
+    receiver
+
+  /// Handle one webhook POST. Parses the request body as JSON and stores
+  /// the resulting `Alert` in the configured AlertLog. Returns the
+  /// HTTPResponse to be sent back to the caller (202 on success, 400 on
+  /// invalid JSON).
+  handleWebhook: req :: HTTPRequest -> HTTPResponse =>
+    parsed := Json parse: req body
+    parsed
+      ifOk: [:data |
+        @expect type
+        self.alertLog record: (Alert fromWebhook: data)
+        HTTPResponse new: #{#status => 202, #body => "\{""accepted"":true}"}
+      ]
+      ifError: [:err |
+        HTTPResponse new: #{
+          #status => 400,
+          #body => "\{""error"":""invalid JSON""}"
+        }
+      ]
+
+  /// Start the underlying HTTPServer with the supplied router and resolve
+  /// `self.port` to the OS-assigned port (relevant when started with 0).
+  startServer: router :: HTTPRouter -> Nil =>
+    self.server := HTTPServer start: self.port handler: router
+    self.port := self.server port
+    nil
+
+  /// The TCP port the underlying server is listening on. After
+  /// `startServer:` completes this reflects the resolved ephemeral port
+  /// when one was requested.
+  port -> Integer => self.port
+
+  /// Stop the underlying HTTP server. Safe to call when the server has
+  /// already been stopped or was never started.
+  shutdown -> Nil =>
+    self.server isNil ifFalse: [self.server stop]
+    self.server := nil
+    nil
