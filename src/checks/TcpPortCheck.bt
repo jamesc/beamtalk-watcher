@@ -1,0 +1,75 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// TcpPortCheck — `HealthCheck` implementation that verifies a TCP port is
+/// accepting connections.
+///
+/// Opens a TCP connection to `host:port` via `gen_tcp:connect/4` (Erlang FFI)
+/// with the configured `timeout` (milliseconds). The socket is immediately
+/// closed on success — this is a liveness probe, not a data exchange.
+///
+/// Returns a `CheckResult`:
+///   - `ok` when the connection is established and closed cleanly
+///   - `fail` when the connection is refused, the host is unreachable, the
+///     timeout expires, or DNS resolution fails
+///
+/// ## Examples
+/// ```beamtalk
+/// check := TcpPortCheck host: "localhost" port: 5432
+/// check check       // => CheckResult ok: ... details: "Port open"
+///
+/// check := TcpPortCheck host: "db.internal" port: 5432
+/// check check       // => CheckResult fail: ... details: "TCP error: ..."
+/// ```
+sealed typed Value subclass: TcpPortCheck
+  field: host :: String = "localhost"
+  field: port :: Integer = 0
+  field: timeout :: Integer = 3000
+
+  // ===== Class-side factories =====
+
+  /// Build a check for `aHost:aPort` with the default timeout.
+  class host: aHost :: String port: aPort :: Integer -> TcpPortCheck =>
+    self new: #{#host => aHost, #port => aPort}
+
+  /// Build a check with an explicit connect timeout (milliseconds).
+  class host: aHost :: String port: aPort :: Integer timeout: ms :: Integer -> TcpPortCheck =>
+    self new: #{#host => aHost, #port => aPort, #timeout => ms}
+
+  // ===== HealthCheck protocol =====
+
+  /// Open a TCP connection and return a CheckResult describing the outcome.
+  check -> CheckResult =>
+    // gen_tcp:connect/4 returns a Result(Socket, atom()) — the FFI is untyped
+    // so the whole call surfaces as Dynamic. Type-erase via @expect so the
+    // typed-class check passes; ifOk:/ifError: dispatch is dynamic anyway.
+    @expect type
+    result := (Erlang gen_tcp)
+      connect: self.host asAtom
+      port: self.port
+      opts: #()
+      timeout: self.timeout
+    @expect type
+    result ifOk: [:sock |
+      self okResultFor: sock
+    ] ifError: [:err | self errorResultFor: err]
+
+  /// Human-readable name — "TCP <host>:<port>".
+  name -> String => "TCP " ++ self.host ++ ":" ++ self.port printString
+
+  /// Target string — "<host>:<port>".
+  target -> String => self.host ++ ":" ++ self.port printString
+
+  // ===== Private helpers =====
+
+  /// Build a `CheckResult ok` and close the socket. Splitting this out keeps
+  /// the side effect (close) off the `ifOk:` block expression.
+  okResultFor: sock :: Object -> CheckResult =>
+    @expect type
+    (Erlang gen_tcp) close: sock
+    CheckResult ok: self name details: "Port open"
+
+  /// Build a `CheckResult fail` from a gen_tcp-layer error (refused, timeout,
+  /// nxdomain, ...).
+  errorResultFor: err :: Object -> CheckResult =>
+    CheckResult fail: self name details: "TCP error: " ++ err printString

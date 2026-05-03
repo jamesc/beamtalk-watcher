@@ -1,0 +1,65 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// ProcessCheck — `HealthCheck` implementation that verifies a named BEAM
+/// process is alive.
+///
+/// Resolves the process name via `erlang:whereis/1`. When that returns a pid,
+/// the pid is then probed with `erlang:is_process_alive/1`. Any other return
+/// (atom `undefined`, dead pid) yields a failing `CheckResult`.
+///
+/// `processName` may be supplied as a `Symbol` (preferred — matches Erlang
+/// register names directly) or a `String`, which is converted to an atom on
+/// each check via `asAtom`.
+///
+/// Returns a `CheckResult`:
+///   - `ok` when `whereis/1` returns a pid and `is_process_alive/1` returns true
+///   - `fail` when the name is unregistered or the pid is dead
+///
+/// ## Examples
+/// ```beamtalk
+/// check := ProcessCheck name: #my_worker
+/// check check       // => CheckResult ok: ... details: "Process alive"
+///
+/// check := ProcessCheck name: "no_such_proc"
+/// check check       // => CheckResult fail: ... details: "Process not registered"
+/// ```
+sealed typed Value subclass: ProcessCheck
+  field: processName :: Symbol | String | nil = nil
+
+  // ===== Class-side factories =====
+
+  /// Build a check for the registered name `aName` (Symbol or String).
+  class name: aName :: Symbol | String -> ProcessCheck =>
+    self new: #{#processName => aName}
+
+  // ===== HealthCheck protocol =====
+
+  /// Look up the registered name and return a CheckResult.
+  check -> CheckResult =>
+    self.processName isNil ifTrue: [
+      ^CheckResult fail: self name details: "Process name not set"
+    ]
+    atomName := (self.processName isKindOf: String) ifTrue: [
+      self.processName asAtom
+    ] ifFalse: [self.processName]
+    // erlang:whereis/1 returns a pid or the atom 'undefined' — untyped FFI
+    // surfaces as Dynamic; @expect type silences the typed-class warning.
+    @expect type
+    pid := (Erlang erlang) whereis: atomName
+    @expect type
+    pid == #undefined ifTrue: [
+      ^CheckResult fail: self name details: "Process not registered"
+    ]
+    @expect type
+    alive := (Erlang erlang) is_process_alive: pid
+    @expect type
+    alive ifTrue: [
+      CheckResult ok: self name details: "Process alive"
+    ] ifFalse: [CheckResult fail: self name details: "Process not alive"]
+
+  /// Human-readable name — "Process <name>".
+  name -> String => "Process " ++ self.processName printString
+
+  /// Target string — the process name as printed.
+  target -> String => self.processName printString

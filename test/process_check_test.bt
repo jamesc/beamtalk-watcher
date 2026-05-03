@@ -1,0 +1,78 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for ProcessCheck (BT-2131).
+///
+/// Spawns a long-lived Erlang process via `erlang:spawn/1`, registers it
+/// under a unique name, and asserts the resulting `CheckResult`. Uses raw
+/// Erlang spawn (not an Actor) so the test does not depend on Actor named
+/// registration semantics — `erlang:whereis/1` sees raw OTP registrations
+/// as well.
+///
+/// Coverage: registered+alive (ok), unregistered name (fail), name not set
+/// (fail), String name accepted as well as Symbol.
+TestCase subclass: ProcessCheckTest
+  field: registeredName = nil
+
+  tearDown =>
+    self.registeredName isNil
+      ifFalse: [
+        // Resolve, then exit the process so the registration is released.
+        pid := (Erlang erlang) whereis: self.registeredName
+        pid == #undefined ifFalse: [(Erlang erlang) exit: pid arg: #kill]
+        self.registeredName := nil
+      ]
+
+  // ----- helpers -----
+
+  /// Spawn a long-lived idle process and register it under `name`.
+  /// The process runs `timer:sleep(infinity)` so it stays alive until
+  /// `tearDown` kills it.
+  registerLongLivedAs: name :: Symbol =>
+    sleeperFun := [(Erlang timer) sleep: #infinity]
+    pid := (Erlang erlang) spawn: sleeperFun
+    (Erlang erlang) register: name arg: pid
+    self.registeredName := name
+
+  // ----- field defaults -----
+  testDefaultsForNewInstance =>
+    check := ProcessCheck new
+    self assert: check processName equals: nil
+
+  testFactorySetsName =>
+    check := ProcessCheck name: #worker
+    self assert: check processName equals: #worker
+
+  testNameAndTargetIncludeProcessName =>
+    check := ProcessCheck name: #worker
+    self assert: check name equals: "Process #worker"
+    self assert: check target equals: "#worker"
+
+  // ----- happy path: registered and alive -----
+  testRegisteredAliveProducesOkResult =>
+    self registerLongLivedAs: #bt2131_proc_check_alive
+    check := ProcessCheck name: #bt2131_proc_check_alive
+    result := check check
+    self assert: result isOk
+    self assert: result details equals: "Process alive"
+
+  // ----- String name is converted to atom -----
+  testStringNameIsAcceptedAndConverted =>
+    self registerLongLivedAs: #bt2131_proc_check_string
+    check := ProcessCheck name: "bt2131_proc_check_string"
+    result := check check
+    self assert: result isOk
+
+  // ----- unregistered name -----
+  testUnregisteredNameProducesFailResult =>
+    check := ProcessCheck name: #bt2131_proc_check_does_not_exist
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "not registered")
+
+  // ----- name field unset -----
+  testMissingNameProducesFailResult =>
+    check := ProcessCheck new
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "not set")
