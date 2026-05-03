@@ -1,0 +1,124 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for MonitorEvent value object (BT-2119).
+/// Covers: keyword factory, predicates, symbol equality, auto-timestamping.
+TestCase subclass: MonitorEventTest
+
+  // --- Factory + auto-timestamp ---
+  testFactoryCreatesEvent =>
+    event := MonitorEvent
+      type: #alert
+      monitor: "mon"
+      check: "chk"
+      result: "res"
+      previousStatus: #ok
+    self assert: event type equals: #alert
+    self assert: event monitor equals: "mon"
+    self assert: event check equals: "chk"
+    self assert: event result equals: "res"
+    self assert: event previousStatus equals: #ok
+
+  testFactoryAutoStampsTimestamp =>
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #unknown
+    self deny: event timestamp == nil
+
+  // --- Predicates ---
+  testIsAlertForAlertType =>
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #ok
+    self assert: event isAlert
+
+  testIsAlertFalseForRecoveredType =>
+    event := MonitorEvent
+      type: #recovered
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #fail
+    self deny: event isAlert
+
+  testIsRecoveryForRecoveredType =>
+    event := MonitorEvent
+      type: #recovered
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #fail
+    self assert: event isRecovery
+
+  testIsRecoveryFalseForAlertType =>
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #ok
+    self deny: event isRecovery
+
+  // --- Symbol equality ---
+  testSymbolEqualityAlert =>
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #ok
+    self assert: event type == #alert
+
+  testSymbolEqualityRecovered =>
+    event := MonitorEvent
+      type: #recovered
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #fail
+    self assert: event type == #recovered
+
+  // --- Default values ---
+  testNewHasDefaults =>
+    event := MonitorEvent new
+    self assert: event type equals: #unknown
+    self assert: event monitor equals: nil
+    self assert: event check equals: nil
+    self assert: event result equals: nil
+    self assert: event previousStatus equals: #unknown
+    self assert: event timestamp equals: nil
+
+  // --- Immutability (sealed Value) ---
+  testFieldAtPutRaisesImmutableValue =>
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: nil
+      result: nil
+      previousStatus: #ok
+    self should: [event fieldAt: #type put: #recovered] raise: #immutable_value
+
+  // --- Value equality ---
+  testValueEqualitySameFields =>
+    e1 := MonitorEvent new: #{
+      #type => #alert,
+      #monitor => "m",
+      #previousStatus => #ok
+    }
+    e2 := MonitorEvent new: #{
+      #type => #alert,
+      #monitor => "m",
+      #previousStatus => #ok
+    }
+    self assert: (e1 == e2)
+
+  testValueInequalityDifferentFields =>
+    e1 := MonitorEvent new: #{#type => #alert}
+    e2 := MonitorEvent new: #{#type => #recovered}
+    self deny: (e1 == e2)

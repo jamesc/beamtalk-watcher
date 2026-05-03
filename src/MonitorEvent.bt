@@ -1,0 +1,33 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// MonitorEvent — immutable record of a monitor state change.
+///
+/// Created by Monitor when status transitions occur (alert or recovery).
+/// Carries the event type, originating monitor/check, the triggering
+/// result, and the previous status for context.
+sealed Value subclass: MonitorEvent
+  field: type = #unknown  // #alert | #recovered
+  field: monitor = nil
+  field: check = nil
+  field: result = nil
+  field: previousStatus = #unknown
+  field: timestamp = nil
+
+  /// Factory — auto-stamps timestamp with DateTime now.
+  class type: t monitor: m check: c result: r previousStatus: ps =>
+    self
+      new: #{
+        #type => t,
+        #monitor => m,
+        #check => c,
+        #result => r,
+        #previousStatus => ps,
+        #timestamp => DateTime now
+      }
+
+  /// Predicate — true when this event represents an alert.
+  isAlert => self.type == #alert
+
+  /// Predicate — true when this event represents a recovery.
+  isRecovery => self.type == #recovered
