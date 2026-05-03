@@ -3,19 +3,19 @@
 
 /// Alert — immutable value object representing a received webhook alert.
 /// See SPEC.md section 9.
-sealed Value subclass: Alert
-  field: type = ""
-  field: checkName = ""
-  field: target = ""
-  field: status = ""
-  field: details = ""
-  field: previousStatus = ""
-  field: timestamp = nil
-  field: receivedAt = nil
+sealed typed Value subclass: Alert
+  field: type :: String = ""
+  field: checkName :: String = ""
+  field: target :: String = ""
+  field: status :: String = ""
+  field: details :: String = ""
+  field: previousStatus :: String = ""
+  field: timestamp :: String | nil = nil
+  field: receivedAt :: DateTime | nil = nil
 
   /// Build an Alert from a parsed webhook Dictionary.
   /// The dictionary uses string keys matching the WebhookChannel JSON format.
-  class fromWebhook: data =>
+  class fromWebhook: data :: Dictionary -> Alert =>
     self
       new: #{
         #type => data at: "type",
@@ -29,7 +29,7 @@ sealed Value subclass: Alert
       }
 
   /// True when this alert represents a failure notification.
-  isAlert => self.type == "alert"
+  isAlert -> Boolean => self.type == "alert"
 
   /// True when this alert represents a recovery notification.
-  isRecovery => self.type == "recovered"
+  isRecovery -> Boolean => self.type == "recovered"
