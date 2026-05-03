@@ -1,0 +1,62 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// NotificationRouter — actor that fans MonitorEvents out to channels.
+///
+/// Receives `MonitorEvent`s via `handleEvent:`, applies a 60-second
+/// deduplication window keyed on `check name + type`, and forwards
+/// each unique event to every registered channel asynchronously by
+/// sending `deliver:`.
+///
+/// Channels are any actor responding to `deliver: aMonitorEvent`.
+/// The `recentEvents` ring buffer is capped at 100 entries.
+///
+/// See SPEC.md §5.
+typed Actor subclass: NotificationRouter
+  state: channels :: List = #()
+  state: rules :: List = #()
+  state: recentEvents :: List = #()
+
+  /// Register a channel actor. Subsequent events will be forwarded to it.
+  addChannel: channel :: Actor -> List =>
+    self.channels := self.channels add: channel
+    self.channels
+
+  /// Unregister a channel actor. Identity comparison via `=:=`.
+  removeChannel: channel :: Actor -> List =>
+    @expect type
+    self.channels := self.channels reject: [:c | c =:= channel]
+    self.channels
+
+  /// Receive a MonitorEvent. Dedup against recent events; fan out to
+  /// every channel if not a duplicate.
+  ///
+  /// Dedup window: skip when an event with the same `check name` and
+  /// same `type` has been seen within the last 60 seconds.
+  handleEvent: event :: MonitorEvent -> Boolean =>
+    @expect type
+    isDuplicate := self.recentEvents
+      anySatisfy: [:e |
+        e check name == event check name and: [
+          e type == event type and: [
+            (DateTime now diffSeconds: e timestamp) < 60
+          ]
+        ]
+      ]
+    isDuplicate
+      ifTrue: [false]
+      ifFalse: [
+        self.recentEvents := self trimRecent: (self.recentEvents add: event)
+        self.channels do: [:channel | channel deliver: event!]
+        true
+      ]
+
+  /// Cap the recent-event ring buffer at 100 entries (newest retained).
+  trimRecent: events :: List -> List =>
+    events size > 100 ifTrue: [events drop: events size - 100] ifFalse: [events]
+
+  /// Read-only accessor for tests and inspection.
+  channels -> List => self.channels
+
+  /// Read-only accessor for tests and inspection.
+  recentEvents -> List => self.recentEvents
