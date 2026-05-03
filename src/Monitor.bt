@@ -30,7 +30,7 @@
 ///
 /// See SPEC.md §3.
 typed Actor subclass: Monitor
-  state: check :: HealthCheck | nil = nil
+  state: check :: HealthCheck
   state: interval :: Integer = 30
   state: threshold :: Integer = 3
   state: currentStatus :: Symbol = #unknown
@@ -66,26 +66,26 @@ typed Actor subclass: Monitor
   ///
   /// Idempotent: calling `start` while a timer is already scheduled is a
   /// no-op (the second call would otherwise leak the first timer).
-  start -> Nil =>
+  start -> Monitor =>
     self.timer == nil
       ifTrue: [
         self runCheck
         self.timer := Timer every: self.interval * 1000 do: [self runCheck!]
       ]
-    nil
+    self
 
   /// Cancel the recurring timer (if any). Safe to call when no timer
   /// has been started — leaves state unchanged in that case.
   ///
   /// Named `stopMonitoring` rather than `stop` because `stop` is sealed
   /// on `Actor` (used by the supervisor lifecycle).
-  stopMonitoring -> Nil =>
+  stopMonitoring -> Monitor =>
     self.timer == nil
       ifFalse: [
         self.timer cancel
         self.timer := nil
       ]
-    nil
+    self
 
   // ===== Check loop =====
 
@@ -137,7 +137,7 @@ typed Actor subclass: Monitor
 
   /// Send a `MonitorEvent` to the listener actor. The cast (`!`) makes
   /// this fire-and-forget so a slow listener never stalls the monitor.
-  notify: type :: Symbol from: previousStatus :: Symbol -> Nil =>
+  notify: type :: Symbol from: previousStatus :: Symbol -> Monitor =>
     event :: MonitorEvent := MonitorEvent
       type: type
       monitor: self
@@ -145,7 +145,7 @@ typed Actor subclass: Monitor
       result: self.lastResult
       previousStatus: previousStatus
     self.listener handleEvent: event!
-    nil
+    self
 
   // ===== Internal =====
 

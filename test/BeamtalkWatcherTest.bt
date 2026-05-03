@@ -1,7 +1,0 @@
-// Copyright 2026 beamtalk_watcher authors
-// SPDX-License-Identifier: Apache-2.0
-
-TestCase subclass: BeamtalkWatcherTest
-
-  testBasic =>
-    self assert: (BeamtalkWatcher greet) equals: "Hello from beamtalk_watcher!"
