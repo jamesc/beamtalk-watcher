@@ -1,0 +1,102 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the Alert value object (BT-2120).
+TestCase subclass: AlertTest
+
+  /// Helper: build a sample webhook payload dictionary matching WebhookChannel format.
+  sampleAlertPayload =>
+    #{
+      "type" => "alert",
+      "check" => "HTTP http://localhost:3000/health",
+      "target" => "http://localhost:3000/health",
+      "status" => "fail",
+      "details" => "Expected 200, got 503",
+      "previousStatus" => "ok",
+      "timestamp" => "2026-05-03T10:00:00Z"
+    }
+
+  /// Helper: build a sample recovery payload.
+  sampleRecoveryPayload =>
+    #{
+      "type" => "recovered",
+      "check" => "TCP localhost:5432",
+      "target" => "localhost:5432",
+      "status" => "ok",
+      "details" => "Port open",
+      "previousStatus" => "fail",
+      "timestamp" => "2026-05-03T10:05:00Z"
+    }
+
+  // --- fromWebhook: with direct dictionary ---
+  testFromWebhookSetsType =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert type equals: "alert"
+
+  testFromWebhookSetsCheckName =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert checkName equals: "HTTP http://localhost:3000/health"
+
+  testFromWebhookSetsTarget =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert target equals: "http://localhost:3000/health"
+
+  testFromWebhookSetsStatus =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert status equals: "fail"
+
+  testFromWebhookSetsDetails =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert details equals: "Expected 200, got 503"
+
+  testFromWebhookSetsPreviousStatus =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert previousStatus equals: "ok"
+
+  testFromWebhookSetsTimestamp =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert timestamp equals: "2026-05-03T10:00:00Z"
+
+  testFromWebhookSetsReceivedAt =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert receivedAt class equals: DateTime
+
+  // --- fromWebhook: via Json round-trip (simulates real webhook path) ---
+  testFromWebhookViaJsonRoundTrip =>
+    json := Json generate: self sampleAlertPayload
+    data := (Json parse: json) unwrap
+    alert := Alert fromWebhook: data
+    self assert: alert type equals: "alert"
+    self assert: alert checkName equals: "HTTP http://localhost:3000/health"
+    self assert: alert target equals: "http://localhost:3000/health"
+    self assert: alert status equals: "fail"
+    self assert: alert details equals: "Expected 200, got 503"
+    self assert: alert previousStatus equals: "ok"
+    self assert: alert timestamp equals: "2026-05-03T10:00:00Z"
+    self assert: alert receivedAt class equals: DateTime
+
+  // --- Predicates ---
+  testIsAlertTrueForAlertType =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert isAlert
+
+  testIsAlertFalseForRecoveryType =>
+    alert := Alert fromWebhook: self sampleRecoveryPayload
+    self deny: alert isAlert
+
+  testIsRecoveryTrueForRecoveredType =>
+    alert := Alert fromWebhook: self sampleRecoveryPayload
+    self assert: alert isRecovery
+
+  testIsRecoveryFalseForAlertType =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self deny: alert isRecovery
+
+  // --- Value semantics ---
+  testAlertIsImmutable =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self should: [alert fieldAt: #type put: "recovered"] raise: #immutable_value
+
+  testAlertClass =>
+    alert := Alert fromWebhook: self sampleAlertPayload
+    self assert: alert class equals: Alert
