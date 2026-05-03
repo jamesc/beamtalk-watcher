@@ -1,0 +1,22 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// RequestCounter — actor that counts requests for testing purposes.
+///
+/// Provides a thread-safe counter that can be incremented from any process
+/// (e.g., an HTTPServer handler block) and queried from tests.
+typed Actor subclass: RequestCounter
+  state: value :: Integer = 0
+
+  /// Increment the counter by one. Returns the new value.
+  increment -> Integer =>
+    self.value := self.value + 1
+    self.value
+
+  /// Current counter value.
+  count -> Integer => self.value
+
+  /// Reset the counter to zero.
+  reset -> Integer =>
+    self.value := 0
+    self.value

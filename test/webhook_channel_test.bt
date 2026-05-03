@@ -1,0 +1,196 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for WebhookChannel actor (BT-2126).
+///
+/// Uses a local HTTPServer on an ephemeral port with a RequestCounter
+/// actor to verify:
+///   - Successful POST with correct JSON payload shape
+///   - No retry on 2xx response
+///   - Retry up to maxRetries on 500 response
+///   - Retry up to maxRetries on connection refused
+///   - JSON payload contains all expected fields
+TestCase subclass: WebhookChannelTest
+  field: srv = nil
+  field: counter = nil
+
+  setUp =>
+    ctr := RequestCounter spawn
+    self.counter := ctr
+
+  tearDown =>
+    self.srv isNil
+      ifFalse: [
+        self.srv stop
+        self.srv := nil
+      ]
+
+  // ----- helpers -----
+
+  /// Build a URL pointing to the local test server.
+  urlFor: path :: String -> String =>
+    "http://127.0.0.1:" ++ self.srv port asString ++ path
+
+  /// Build a MonitorEvent with a StubCheck and CheckResult for testing.
+  sampleEvent -> MonitorEvent =>
+    check := StubCheck name: "HTTP http://localhost:3000/health" target: "http://localhost:3000/health"
+    result := CheckResult fail: "HTTP http://localhost:3000/health" details: "Expected 200, got 503"
+    MonitorEvent
+      type: #alert
+      monitor: nil
+      check: check
+      result: result
+      previousStatus: #ok
+
+  // ----- Successful POST (no retry) -----
+  testSuccessfulPostNoRetry =>
+    ctr := self.counter
+    self.srv := HTTPServer
+      start: 0
+      handler: [:req |
+        ctr increment
+        HTTPResponse new: #{#status => 200, #body => "ok"}
+      ]
+    // Warm up: ensure server is ready by making a direct request first
+    warmup := HTTPClient post: (self urlFor: "/warmup") body: ""
+    self assert: warmup isOk
+    // Now test via WebhookChannel actor
+    channel := WebhookChannel url: (self urlFor: "/webhook")
+    channel deliver: self sampleEvent
+    self assert: channel pending equals: 0
+    self assert: self.counter count equals: 2
+
+  // ----- 500 response triggers retries up to maxRetries -----
+  testRetryOn500WithFastBackoff =>
+    ctr := self.counter
+    self.srv := HTTPServer
+      start: 0
+      handler: [:req |
+        ctr increment
+        HTTPResponse new: #{#status => 500, #body => "error"}
+      ]
+    // Warm up: ensure server is ready
+    warmup := HTTPClient post: (self urlFor: "/warmup") body: ""
+    self assert: warmup isOk
+    // Warmup counted as request 1, so reset expectation
+    channel := WebhookChannel spawnWith: #{
+      #url => self urlFor: "/webhook",
+      #maxRetries => 3,
+      #retryDelay => 50
+    }
+    channel deliver: self sampleEvent
+    // Delays: 50ms + 100ms + complete = ~200ms total
+    (Erlang timer) sleep: 500
+    // 1 warmup + 3 retries = 4
+    self assert: self.counter count equals: 4
+    self assert: channel pending equals: 0
+
+  // ----- Connection refused triggers retries -----
+  testRetryOnConnectionRefused =>
+    // Port 1 is reserved and effectively never listening.
+    // Use a short timeout so the test doesn't wait for the default 5s.
+    channel := WebhookChannel
+      spawnWith: #{
+        #url => "http://127.0.0.1:1/webhook",
+        #maxRetries => 3,
+        #retryDelay => 50,
+        #timeout => 200
+      }
+    channel deliver: self sampleEvent
+    // Wait for retries to complete: 3 attempts * 200ms timeout + backoff delays
+    (Erlang timer) sleep: 2000
+    self assert: channel pending equals: 0
+
+  // ----- Payload JSON shape -----
+  testPayloadJsonShape =>
+    check := StubCheck name: "HTTP http://localhost:3000/health" target: "http://localhost:3000/health"
+    result := CheckResult fail: "HTTP http://localhost:3000/health" details: "Expected 200, got 503"
+    event := MonitorEvent
+      type: #alert
+      monitor: nil
+      check: check
+      result: result
+      previousStatus: #ok
+    channel := WebhookChannel url: "http://example.com/hook"
+    payload := channel buildPayload: event
+    parsed :: Dictionary(String, Any) := (Json parse: payload) unwrap
+    self assert: (parsed at: "type") equals: "#alert"
+    self assert: (parsed at: "check") equals: "HTTP http://localhost:3000/health"
+    self assert: (parsed at: "target") equals: "http://localhost:3000/health"
+    self assert: (parsed at: "status") equals: "#fail"
+    self assert: (parsed at: "details") equals: "Expected 200, got 503"
+    self assert: (parsed at: "previousStatus") equals: "#ok"
+    self assert: (parsed includesKey: "timestamp")
+
+  // ----- Payload contains all expected keys -----
+  testPayloadContainsAllFields =>
+    check := StubCheck name: "api-check" target: "http://api.example.com"
+    result := CheckResult ok: "api-check" details: "HTTP 200"
+    event := MonitorEvent
+      type: #recovered
+      monitor: nil
+      check: check
+      result: result
+      previousStatus: #fail
+    channel := WebhookChannel url: "http://example.com/hook"
+    payload := channel buildPayload: event
+    parsed :: Dictionary(String, Any) := (Json parse: payload) unwrap
+    self assert: (parsed includesKey: "type")
+    self assert: (parsed includesKey: "check")
+    self assert: (parsed includesKey: "target")
+    self assert: (parsed includesKey: "status")
+    self assert: (parsed includesKey: "details")
+    self assert: (parsed includesKey: "previousStatus")
+    self assert: (parsed includesKey: "timestamp")
+
+  // ----- Successful retry after initial failure -----
+  testSuccessOnSecondAttempt =>
+    // Server returns 500 on first 2 requests, then 200 on subsequent
+    // (first warmup request is counted, so "real" first = request #2)
+    ctr := self.counter
+    self.srv := HTTPServer
+      start: 0
+      handler: [:req |
+        n := ctr increment
+        n <= 2 ifTrue: [
+          HTTPResponse new: #{#status => 500, #body => "error"}
+        ] ifFalse: [HTTPResponse new: #{#status => 200, #body => "ok"}]
+      ]
+    // Warm up: ensure server is ready
+    warmup := HTTPClient post: (self urlFor: "/warmup") body: ""
+    self assert: warmup isOk
+    // Now test: first real request gets 500, second gets 200
+    channel := WebhookChannel spawnWith: #{
+      #url => self urlFor: "/webhook",
+      #maxRetries => 3,
+      #retryDelay => 50
+    }
+    channel deliver: self sampleEvent
+    (Erlang timer) sleep: 500
+    // 1 warmup + 1 fail + 1 success = 3
+    self assert: self.counter count equals: 3
+    self assert: channel pending equals: 0
+
+  // ----- Factory methods -----
+  testUrlFactory =>
+    channel := WebhookChannel url: "http://example.com/hook"
+    self assert: channel url equals: "http://example.com/hook"
+    self assert: channel headers equals: #()
+
+  testUrlHeadersFactory =>
+    channel := WebhookChannel url: "http://example.com/hook" headers: #("Authorization: Bearer tok")
+    self assert: channel url equals: "http://example.com/hook"
+    self assert: channel headers equals: #("Authorization: Bearer tok")
+
+  // ----- Defaults -----
+  testDefaultMaxRetries =>
+    channel := WebhookChannel url: "http://example.com/hook"
+    self assert: channel maxRetries equals: 3
+
+  testDefaultRetryDelay =>
+    channel := WebhookChannel url: "http://example.com/hook"
+    self assert: channel retryDelay equals: 1000
+
+  testPendingStartsAtZero =>
+    channel := WebhookChannel url: "http://example.com/hook"
+    self assert: channel pending equals: 0
