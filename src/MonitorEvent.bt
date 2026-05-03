@@ -8,16 +8,14 @@
 /// result, and the previous status for context.
 sealed Value subclass: MonitorEvent
   field: type :: Symbol = #unknown  // #alert | #recovered
-  field: monitor = nil  // Actor — type omitted because nil default is not assignable to Actor
-  field: check = nil  // HealthCheck implementor — type omitted because nil default is not assignable
-  field: result = nil  // CheckResult — type omitted because nil default is not assignable
+  field: monitor :: Actor | nil = nil
+  field: check = nil  // HealthCheck implementor — Object union once protocol typing lands
+  field: result = nil  // CheckResult — tighten once CheckResult lands on main
   field: previousStatus :: Symbol = #unknown
-  field: timestamp = nil  // DateTime — type omitted because nil default is not assignable
+  field: timestamp :: DateTime | nil = nil
 
   /// Factory — auto-stamps timestamp with DateTime now.
-  /// Note: monitor/check/result parameters are untyped because callers
-  /// (and tests) may pass nil, which is not assignable to Actor/CheckResult.
-  class type: t :: Symbol monitor: m check: c result: r previousStatus: ps :: Symbol -> MonitorEvent =>
+  class type: t :: Symbol monitor: m :: Actor | nil check: c result: r previousStatus: ps :: Symbol -> MonitorEvent =>
     self
       new: #{
         #type => t,
