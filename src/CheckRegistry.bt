@@ -1,0 +1,75 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// CheckRegistry — Actor that manages all active monitors.
+///
+/// Central registry for creating, starting, removing, and querying Monitor
+/// actors. Entry point for REPL interaction and dashboard queries.
+///
+/// Each monitor is indexed by a unique name (Symbol). Adding a check spawns
+/// a Monitor, starts it, and stores it. Removing a check stops the monitor
+/// and removes the entry.
+///
+/// The `status` method collects per-monitor snapshots as a List of
+/// Dictionaries, each with keys `#name`, `#status`, and `#lastResult`.
+///
+/// See SPEC.md §10.
+typed Actor subclass: CheckRegistry
+  state: monitors :: Dictionary(Symbol, Monitor) = #{}
+  state: router :: EventListener | nil = nil
+
+  // ===== Class-side factory =====
+
+  /// Spawn a new CheckRegistry wired to the given notification router.
+  /// The router is passed as the listener to each spawned Monitor.
+  class start: aRouter :: EventListener -> CheckRegistry =>
+    self spawnWith: #{#router => aRouter}
+
+  // ===== Monitor management =====
+
+  /// Create a new Monitor for the given check, start it, and register it
+  /// under `name`. Returns the spawned Monitor actor.
+  ///
+  /// The monitor is wired to this registry's router as its event listener,
+  /// so state-transition events flow to the notification system automatically.
+  add: check :: HealthCheck name: name :: Symbol interval: secs :: Integer threshold: n :: Integer -> Monitor =>
+    monitor :: Monitor := Monitor
+      check: check
+      interval: secs
+      threshold: n
+      listener: self.router
+    self.monitors := self.monitors at: name put: monitor
+    monitor start
+    monitor
+
+  /// Stop and unregister the monitor identified by `name`.
+  /// Raises if `name` is not in the registry.
+  remove: name :: Symbol -> CheckRegistry =>
+    monitor :: Monitor := self.monitors at: name
+    monitor stopMonitoring
+    self.monitors := self.monitors removeKey: name
+    self
+
+  // ===== Query interface =====
+
+  /// Collect a status snapshot for every registered monitor.
+  /// Returns a List of Dictionaries, each with keys:
+  ///   `#name`       — the monitor's registration name (Symbol)
+  ///   `#status`     — the current rolled-up status (Symbol)
+  ///   `#lastResult` — the most recent CheckResult or nil
+  status -> List(Dictionary) =>
+    self.monitors keys
+      collect: [:name |
+        monitor :: Monitor := self.monitors at: name
+        #{
+          #name => name,
+          #status => monitor status,
+          #lastResult => monitor lastResult
+        }
+      ]
+
+  /// Look up a monitor by name. Raises if `name` is not registered.
+  monitor: name :: Symbol -> Monitor => self.monitors at: name
+
+  /// Return all registered monitor names.
+  names -> List(Symbol) => self.monitors keys

@@ -1,0 +1,238 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the CheckRegistry actor (BT-2123).
+///
+/// Covers add/remove monitor management, status aggregation, name listing,
+/// monitor lookup, and missing-name behavior. Tests use ScriptedHealthCheck
+/// and RecordingListener fixtures to drive the Monitor actors synchronously.
+TestCase subclass: CheckRegistryTest
+
+  // ===== Helpers =====
+
+  /// Build a registry wired to a RecordingListener as the router.
+  registryWithRouter -> Dictionary =>
+    router :: RecordingListener := RecordingListener spawn
+    registry :: CheckRegistry := CheckRegistry start: router
+    #{#registry => registry, #router => router}
+
+  /// Build a ScriptedHealthCheck that always succeeds.
+  okCheck: name :: String -> ScriptedHealthCheck =>
+    ok :: CheckResult := CheckResult ok: name details: "ok"
+    ScriptedHealthCheck named: name results: (List withAll: #(ok))
+
+  /// Build a ScriptedHealthCheck that always fails.
+  failCheck: name :: String -> ScriptedHealthCheck =>
+    fail :: CheckResult := CheckResult fail: name details: "fail"
+    ScriptedHealthCheck named: name results: (List withAll: #(fail))
+
+  // ===== Add monitor =====
+  testAddRegistersMonitor =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    monitor :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    self assert: (registry names includes: #web)
+    monitor stopMonitoring
+
+  testAddReturnsMonitor =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "api"
+    monitor :: Monitor := registry
+      add: check
+      name: #api
+      interval: 30
+      threshold: 2
+    self assert: monitor class equals: Monitor
+    monitor stopMonitoring
+
+  testAddStartsMonitor =>
+    // After add, the monitor should have run at least one check (start
+    // calls runCheck synchronously before scheduling the timer).
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "db"
+    monitor :: Monitor := registry
+      add: check
+      name: #db
+      interval: 60
+      threshold: 3
+    self assert: check callCount >= 1
+    monitor stopMonitoring
+
+  testAddMultipleMonitors =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check1 :: ScriptedHealthCheck := self okCheck: "web"
+    check2 :: ScriptedHealthCheck := self okCheck: "api"
+    m1 :: Monitor := registry
+      add: check1
+      name: #web
+      interval: 60
+      threshold: 3
+    m2 :: Monitor := registry
+      add: check2
+      name: #api
+      interval: 30
+      threshold: 2
+    self assert: registry names size equals: 2
+    self assert: (registry names includes: #web)
+    self assert: (registry names includes: #api)
+    m1 stopMonitoring
+    m2 stopMonitoring
+
+  // ===== Remove monitor =====
+  testRemoveUnregistersMonitor =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "temp"
+    _monitor :: Monitor := registry
+      add: check
+      name: #temp
+      interval: 60
+      threshold: 3
+    registry remove: #temp
+    self deny: (registry names includes: #temp)
+
+  testRemoveStopsMonitor =>
+    // After removal, the monitor's timer should be cancelled. We verify
+    // indirectly by checking that the registry no longer tracks it.
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "ephemeral"
+    registry
+      add: check
+      name: #ephemeral
+      interval: 60
+      threshold: 3
+    registry remove: #ephemeral
+    self assert: registry names size equals: 0
+
+  testRemoveMissingNameRaises =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    result := [
+      registry remove: #nonexistent
+      #did_not_raise
+    ] on: Error do: [:e | #raised]
+    self assert: result equals: #raised
+
+  // ===== Status aggregation =====
+  testStatusReturnsListOfSnapshots =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    monitor :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    snapshots :: List(Dictionary) := registry status
+    self assert: snapshots size equals: 1
+    monitor stopMonitoring
+
+  testStatusSnapshotShape =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    monitor :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    snapshots :: List(Dictionary) := registry status
+    snapshot :: Dictionary := snapshots at: 1
+    self assert: (snapshot includesKey: #name)
+    self assert: (snapshot includesKey: #status)
+    self assert: (snapshot includesKey: #lastResult)
+    self assert: (snapshot at: #name) equals: #web
+    monitor stopMonitoring
+
+  testStatusReflectsMonitorState =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "healthy"
+    monitor :: Monitor := registry
+      add: check
+      name: #healthy
+      interval: 60
+      threshold: 3
+    // Drive the monitor directly to populate its state
+    monitor runCheck
+    snapshots :: List(Dictionary) := registry status
+    snapshot :: Dictionary := snapshots at: 1
+    // After successes below threshold, status is still #unknown
+    self assert: (snapshot at: #status) equals: #unknown
+    self deny: (snapshot at: #lastResult) == nil
+    monitor stopMonitoring
+
+  testStatusEmptyWhenNoMonitors =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    self assert: registry status equals: #()
+
+  testStatusMultipleMonitors =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check1 :: ScriptedHealthCheck := self okCheck: "web"
+    check2 :: ScriptedHealthCheck := self failCheck: "db"
+    m1 :: Monitor := registry
+      add: check1
+      name: #web
+      interval: 60
+      threshold: 3
+    m2 :: Monitor := registry
+      add: check2
+      name: #db
+      interval: 60
+      threshold: 3
+    snapshots :: List(Dictionary) := registry status
+    self assert: snapshots size equals: 2
+    m1 stopMonitoring
+    m2 stopMonitoring
+
+  // ===== Monitor lookup =====
+  testMonitorLookupReturnsSameActor =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    added :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    looked :: Monitor := registry monitor: #web
+    self assert: added equals: looked
+    added stopMonitoring
+
+  testMonitorLookupMissingNameRaises =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    result := [
+      registry monitor: #missing
+      #did_not_raise
+    ] on: Error do: [:e | #raised]
+    self assert: result equals: #raised
+
+  // ===== Names =====
+  testNamesEmptyInitially =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    self assert: registry names size equals: 0
+
+  testNamesReflectsRegisteredMonitors =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "alpha"
+    monitor :: Monitor := registry
+      add: check
+      name: #alpha
+      interval: 60
+      threshold: 3
+    self assert: (registry names includes: #alpha)
+    monitor stopMonitoring

@@ -23,10 +23,7 @@ typed Actor subclass: AlertLog
   /// Return all recorded alerts whose `checkName` matches `name`,
   /// preserving newest-first order.
   forCheck: name :: String -> List(Alert) =>
-    self.alerts
-      select: [:a |
-        a checkName == name
-      ]
+    self.alerts select: [:a | a checkName == name]
 
   /// Return all recorded alerts whose `timestamp` is greater than or equal
   /// to `cutoff`, preserving newest-first order. Alerts whose timestamp is
