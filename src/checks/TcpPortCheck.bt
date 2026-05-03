@@ -43,7 +43,6 @@ sealed typed Value subclass: TcpPortCheck
     // gen_tcp:connect/4 returns a Result(Socket, atom()) — the FFI is untyped
     // so the whole call surfaces as Dynamic. Type-erase via @expect so the
     // typed-class check passes; ifOk:/ifError: dispatch is dynamic anyway.
-    @expect type
     result := (Erlang gen_tcp)
       connect: self.host asAtom
       port: self.port
@@ -65,7 +64,6 @@ sealed typed Value subclass: TcpPortCheck
   /// Build a `CheckResult ok` and close the socket. Splitting this out keeps
   /// the side effect (close) off the `ifOk:` block expression.
   okResultFor: sock :: Object -> CheckResult =>
-    @expect type
     (Erlang gen_tcp) close: sock
     CheckResult ok: self name details: "Port open"
 

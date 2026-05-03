@@ -13,17 +13,17 @@
 ///
 /// See SPEC.md §5.
 typed Actor subclass: NotificationRouter
-  state: channels :: List = #()
+  state: channels :: List(Actor) = #()
   state: rules :: List = #()
-  state: recentEvents :: List = #()
+  state: recentEvents :: List(MonitorEvent) = #()
 
   /// Register a channel actor. Subsequent events will be forwarded to it.
-  addChannel: channel :: Actor -> List =>
+  addChannel: channel :: Actor -> List(Actor) =>
     self.channels := self.channels add: channel
     self.channels
 
   /// Unregister a channel actor. Identity comparison via `=:=`.
-  removeChannel: channel :: Actor -> List =>
+  removeChannel: channel :: Actor -> List(Actor) =>
     @expect type
     self.channels := self.channels reject: [:c | c =:= channel]
     self.channels
@@ -34,7 +34,6 @@ typed Actor subclass: NotificationRouter
   /// Dedup window: skip when an event with the same `check name` and
   /// same `type` has been seen within the last 60 seconds.
   handleEvent: event :: MonitorEvent -> Boolean =>
-    @expect type
     isDuplicate := self.recentEvents
       anySatisfy: [:e |
         e check name == event check name and: [
@@ -52,11 +51,11 @@ typed Actor subclass: NotificationRouter
       ]
 
   /// Cap the recent-event ring buffer at 100 entries (newest retained).
-  trimRecent: events :: List -> List =>
+  trimRecent: events :: List(MonitorEvent) -> List(MonitorEvent) =>
     events size > 100 ifTrue: [events drop: events size - 100] ifFalse: [events]
 
   /// Read-only accessor for tests and inspection.
-  channels -> List => self.channels
-
+  channels -> List(Actor) => self.channels
+  
   /// Read-only accessor for tests and inspection.
-  recentEvents -> List => self.recentEvents
+  recentEvents -> List(MonitorEvent) => self.recentEvents

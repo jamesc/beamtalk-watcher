@@ -24,7 +24,7 @@ TestCase subclass: TcpPortCheckTest
   /// port number; the socket is stored on `self.listenSock` for `tearDown` to
   /// close.
   startListener -> Integer =>
-    listenResult := (Erlang gen_tcp) listen: 0 opts: #()
+    listenResult := (Erlang gen_tcp) listen: 0 options: #()
     self.listenSock := listenResult unwrap
     portResult := (Erlang inet) port: self.listenSock
     portResult unwrap

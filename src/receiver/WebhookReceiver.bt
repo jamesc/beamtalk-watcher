@@ -17,7 +17,7 @@
 /// value via the `port` accessor (e.g. in tests).
 typed Actor subclass: WebhookReceiver
   state: server :: HTTPServer | nil = nil
-  state: alertLog :: AlertLog | nil = nil
+  state: alertLog :: AlertLog
   state: port :: Integer = 0
 
   /// Spawn a WebhookReceiver bound to `aPort` and start its HTTP server.
@@ -43,10 +43,9 @@ typed Actor subclass: WebhookReceiver
   /// HTTPResponse to be sent back to the caller (202 on success, 400 on
   /// invalid JSON).
   handleWebhook: req :: HTTPRequest -> HTTPResponse =>
-    parsed := Json parse: req body
+    parsed :: Result(Dictionary) := Json parse: req body
     parsed
       ifOk: [:data |
-        @expect type
         self.alertLog record: (Alert fromWebhook: data)
         HTTPResponse new: #{#status => 202, #body => "\{""accepted"":true}"}
       ]
@@ -59,10 +58,10 @@ typed Actor subclass: WebhookReceiver
 
   /// Start the underlying HTTPServer with the supplied router and resolve
   /// `self.port` to the OS-assigned port (relevant when started with 0).
-  startServer: router :: HTTPRouter -> Nil =>
+  startServer: router :: HTTPRouter -> WebhookReceiver =>
     self.server := HTTPServer start: self.port handler: router
     self.port := self.server port
-    nil
+    self
 
   /// The TCP port the underlying server is listening on. After
   /// `startServer:` completes this reflects the resolved ephemeral port
@@ -71,7 +70,7 @@ typed Actor subclass: WebhookReceiver
 
   /// Stop the underlying HTTP server. Safe to call when the server has
   /// already been stopped or was never started.
-  shutdown -> Nil =>
+  shutdown -> WebhookReceiver =>
     self.server isNil ifFalse: [self.server stop]
     self.server := nil
-    nil
+    self

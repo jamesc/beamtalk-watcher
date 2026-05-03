@@ -92,7 +92,7 @@ TestCase subclass: MonitorEventTest
     self assert: event check equals: nil
     self assert: event result equals: nil
     self assert: event previousStatus equals: #unknown
-    self assert: event timestamp equals: nil
+    self assert: event timestamp class equals: DateTime
 
   // --- Immutability (sealed Value) ---
   testFieldAtPutRaisesImmutableValue =>
