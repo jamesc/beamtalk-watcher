@@ -7,14 +7,14 @@
 /// instances. Each factory auto-stamps the current time via `DateTime now`.
 ///
 /// Predicates `isOk` and `isFail` test the status symbol.
-sealed Value subclass: CheckResult
-  field: status = #unknown
-  field: checkName = ""
-  field: details = ""
-  field: timestamp = nil
+sealed typed Value subclass: CheckResult
+  field: status :: Symbol = #unknown
+  field: checkName :: String = ""
+  field: details :: String = ""
+  field: timestamp :: DateTime | nil = nil
 
   /// Create a passing check result.
-  class ok: name details: details =>
+  class ok: name :: String details: details :: String -> CheckResult =>
     self
       new: #{
         #status => #ok,
@@ -24,7 +24,7 @@ sealed Value subclass: CheckResult
       }
 
   /// Create a failing check result.
-  class fail: name details: details =>
+  class fail: name :: String details: details :: String -> CheckResult =>
     self
       new: #{
         #status => #fail,
@@ -34,7 +34,7 @@ sealed Value subclass: CheckResult
       }
 
   /// True when the check passed.
-  isOk => self.status == #ok
+  isOk -> Boolean => self.status == #ok
 
   /// True when the check failed.
-  isFail => self.status == #fail
+  isFail -> Boolean => self.status == #fail
