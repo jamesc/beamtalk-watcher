@@ -1,0 +1,82 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for CheckResult value object (BT-2118).
+/// Covers: factory creation, predicate truth tables, timestamp is set.
+TestCase subclass: CheckResultTest
+
+  // --- ok: factory ---
+  testOkFactoryCreatesInstance =>
+    r := CheckResult ok: "api" details: "HTTP 200"
+    self assert: r class equals: CheckResult
+
+  testOkFactorySetsStatus =>
+    r := CheckResult ok: "api" details: "HTTP 200"
+    self assert: r status equals: #ok
+
+  testOkFactorySetsCheckName =>
+    r := CheckResult ok: "api" details: "HTTP 200"
+    self assert: r checkName equals: "api"
+
+  testOkFactorySetsDetails =>
+    r := CheckResult ok: "api" details: "HTTP 200"
+    self assert: r details equals: "HTTP 200"
+
+  testOkFactorySetsTimestamp =>
+    r := CheckResult ok: "api" details: "HTTP 200"
+    self assert: r timestamp class equals: DateTime
+
+  // --- fail: factory ---
+  testFailFactoryCreatesInstance =>
+    r := CheckResult fail: "db" details: "Connection refused"
+    self assert: r class equals: CheckResult
+
+  testFailFactorySetsStatus =>
+    r := CheckResult fail: "db" details: "Connection refused"
+    self assert: r status equals: #fail
+
+  testFailFactorySetsCheckName =>
+    r := CheckResult fail: "db" details: "Connection refused"
+    self assert: r checkName equals: "db"
+
+  testFailFactorySetsDetails =>
+    r := CheckResult fail: "db" details: "Connection refused"
+    self assert: r details equals: "Connection refused"
+
+  testFailFactorySetsTimestamp =>
+    r := CheckResult fail: "db" details: "timeout"
+    self assert: r timestamp class equals: DateTime
+
+  // --- predicate truth table ---
+  testOkResultIsOk =>
+    r := CheckResult ok: "x" details: "y"
+    self assert: r isOk
+
+  testOkResultIsNotFail =>
+    r := CheckResult ok: "x" details: "y"
+    self deny: r isFail
+
+  testFailResultIsFail =>
+    r := CheckResult fail: "x" details: "y"
+    self assert: r isFail
+
+  testFailResultIsNotOk =>
+    r := CheckResult fail: "x" details: "y"
+    self deny: r isOk
+
+  // --- default instance ---
+  testDefaultStatusIsUnknown =>
+    r := CheckResult new
+    self assert: r status equals: #unknown
+
+  testDefaultIsNeitherOkNorFail =>
+    r := CheckResult new
+    self deny: r isOk
+    self deny: r isFail
+
+  // --- timestamp ordering ---
+  testTimestampIsRecentDateTime =>
+    before := DateTime now
+    r := CheckResult ok: "x" details: "y"
+    // Timestamp should be >= the time captured just before creation
+    self assert: (r timestamp >= before)

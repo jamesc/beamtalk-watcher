@@ -1,0 +1,40 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// CheckResult — immutable result of a single health check execution.
+///
+/// Use the class-side factories `ok:details:` and `fail:details:` to create
+/// instances. Each factory auto-stamps the current time via `DateTime now`.
+///
+/// Predicates `isOk` and `isFail` test the status symbol.
+sealed typed Value subclass: CheckResult
+  field: status :: Symbol = #unknown
+  field: checkName :: String = ""
+  field: details :: String = ""
+  field: timestamp :: DateTime | nil = nil
+
+  /// Create a passing check result.
+  class ok: name :: String details: details :: String -> CheckResult =>
+    self
+      new: #{
+        #status => #ok,
+        #checkName => name,
+        #details => details,
+        #timestamp => DateTime now
+      }
+
+  /// Create a failing check result.
+  class fail: name :: String details: details :: String -> CheckResult =>
+    self
+      new: #{
+        #status => #fail,
+        #checkName => name,
+        #details => details,
+        #timestamp => DateTime now
+      }
+
+  /// True when the check passed.
+  isOk -> Boolean => self.status == #ok
+
+  /// True when the check failed.
+  isFail -> Boolean => self.status == #fail
