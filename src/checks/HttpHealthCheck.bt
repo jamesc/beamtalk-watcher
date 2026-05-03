@@ -1,0 +1,102 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// HttpHealthCheck — `HealthCheck` implementation that polls a URL via GET.
+///
+/// Performs a single HTTP GET against `url`, then verifies:
+///   1. The response status equals `expectedStatus` (default 200), and
+///   2. If `bodyContains` is non-nil, the response body includes that
+///      substring.
+///
+/// Returns a `CheckResult`:
+///   - `ok` when both conditions are met
+///   - `fail` when the status or body check fails, or the request errors
+///     out (timeout, connection refused, DNS failure, ...)
+///
+/// ## Examples
+/// ```beamtalk
+/// check := HttpHealthCheck url: "http://localhost:8080/health"
+/// check check       // => CheckResult ok: ... details: "HTTP 200"
+///
+/// check := HttpHealthCheck
+///   url: "http://localhost:8080/api"
+///   expectedStatus: 200
+///   bodyContains: """status"":""ok"""
+///   timeout: 2000
+/// ```
+sealed typed Value subclass: HttpHealthCheck
+  field: url :: String = ""
+  field: expectedStatus :: Integer = 200
+  field: bodyContains :: String | nil = nil
+  field: timeout :: Integer = 5000
+
+  // ===== Class-side factories =====
+
+  /// Build a check for `aUrl` with all other fields at their defaults.
+  class url: aUrl :: String -> HttpHealthCheck => self new: #{#url => aUrl}
+
+  /// Build a check with an explicit expected status.
+  class url: aUrl :: String expectedStatus: status :: Integer -> HttpHealthCheck =>
+    self new: #{#url => aUrl, #expectedStatus => status}
+
+  /// Build a check that also asserts the response body contains a substring.
+  class url: aUrl :: String expectedStatus: status :: Integer bodyContains: substring :: String | nil timeout: ms :: Integer -> HttpHealthCheck =>
+    self
+      new: #{
+        #url => aUrl,
+        #expectedStatus => status,
+        #bodyContains => substring,
+        #timeout => ms
+      }
+
+  // ===== HealthCheck protocol =====
+
+  /// Run the HTTP request and return a CheckResult.
+  check -> CheckResult =>
+    options := #{#timeout => self.timeout}
+    result := HTTPClient
+      request: #get
+      url: self.url
+      options: options
+    result
+      ifOk: [:resp | self evaluateResponse: resp]
+      ifError: [:err |
+        // The Result error payload is opaque (HTTP backend may surface
+        // an atom like #timeout or a tuple) — type-erase here to keep
+        // the typed-class check happy, then format via printString.
+        @expect type
+        self errorResultFor: err
+      ]
+
+  /// Human-readable name — "HTTP <url>".
+  name -> String => "HTTP " ++ self.url
+
+  /// Target string — the URL being polled.
+  target -> String => self.url
+
+  // ===== Private helpers =====
+
+  /// Build a `CheckResult fail` from an HTTP-layer error (timeout, refused, ...).
+  errorResultFor: err :: Object -> CheckResult =>
+    CheckResult fail: self name details: "HTTP error: " ++ err printString
+
+  /// Apply status and body matchers to a successful HTTP response.
+  evaluateResponse: resp :: HTTPResponse -> CheckResult =>
+    statusOk := resp status == self.expectedStatus
+    bodyOk := self.bodyContains isNil ifTrue: [
+      true
+    ] ifFalse: [resp body includesSubstring: self.bodyContains]
+    statusOk
+      ifFalse: [
+        ^CheckResult
+          fail: self name
+          details: "Expected status "
+            ++ self.expectedStatus printString
+            ++ ", got "
+            ++ resp status printString
+      ]
+    bodyOk
+      ifFalse: [
+        ^CheckResult fail: self name details: "Body did not contain " ++ self.bodyContains printString
+      ]
+    CheckResult ok: self name details: "HTTP " ++ resp status printString
