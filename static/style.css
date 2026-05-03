@@ -1,0 +1,97 @@
+/* Beamtalk Watcher — Dashboard Stylesheet */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e0e0e0;
+  background: #1a1a2e;
+  padding: 1.5rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #ffffff;
+}
+
+h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem;
+  color: #cccccc;
+}
+
+/* Status table */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #2a2a40;
+}
+
+th {
+  font-weight: 600;
+  color: #888;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Status row colors */
+
+tr.green td {
+  color: #a3e635;
+}
+
+tr.red td {
+  color: #f87171;
+}
+
+tr.grey td {
+  color: #737373;
+}
+
+tr.green td:first-child::before { content: "\25CF  "; color: #a3e635; }
+tr.red td:first-child::before   { content: "\25CF  "; color: #f87171; }
+tr.grey td:first-child::before  { content: "\25CF  "; color: #737373; }
+
+/* Alert list */
+
+.alert-item {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #2a2a40;
+  font-size: 0.9em;
+}
+
+.alert-item .timestamp {
+  color: #666;
+  margin-right: 0.75rem;
+}
+
+/* Utility */
+
+.muted {
+  color: #666;
+}
+
+.poll-indicator {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  font-size: 0.75em;
+  color: #555;
+}
