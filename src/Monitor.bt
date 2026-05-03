@@ -1,0 +1,187 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Monitor — Actor that runs a `HealthCheck` periodically and tracks
+/// state transitions, emitting `MonitorEvent`s to a listener actor.
+///
+/// One Monitor instance is spawned per check. The Monitor runs the check
+/// every `interval` seconds via `Timer every:do:`, recording each outcome
+/// in a bounded `history` (most recent 50 results).
+///
+/// ## State transitions
+///
+/// The monitor tracks `currentStatus` (`#unknown` | `#ok` | `#fail`) and
+/// emits events only when the status crosses a threshold:
+///
+/// - `#alert` — emitted exactly once when `consecutiveFailures` first
+///   reaches `threshold` while `currentStatus` is not already `#fail`.
+/// - `#recovered` — emitted exactly once when `consecutiveRecoveries`
+///   first reaches `threshold` while `currentStatus` is `#fail`.
+///
+/// Flapping (alternating success/failure) does not produce events because
+/// the consecutive counters reset on every transition.
+///
+/// ## Listener
+///
+/// The listener is any actor responding to `handleEvent: aMonitorEvent`.
+/// In production this is a `NotificationRouter`; tests inject a recording
+/// stub. Notifications are delivered asynchronously via `!` so the
+/// monitor's own check loop is never blocked.
+///
+/// See SPEC.md §3.
+typed Actor subclass: Monitor
+  state: check :: HealthCheck | nil = nil
+  state: interval :: Integer = 30
+  state: threshold :: Integer = 3
+  state: currentStatus :: Symbol = #unknown
+  state: consecutiveFailures :: Integer = 0
+  state: consecutiveRecoveries :: Integer = 0
+  state: lastResult :: CheckResult | nil = nil
+  state: listener :: EventListener | nil = nil
+  state: history :: List(CheckResult) = #()
+  state: timer :: Timer | nil = nil
+
+  // ===== Class-side factory =====
+
+  /// Spawn a new Monitor wired to `aCheck`, polling every `secs` seconds,
+  /// with threshold `n` consecutive results before emitting an event,
+  /// and notifying `anActor` on state changes.
+  ///
+  /// The returned actor is spawned but not yet running checks — call
+  /// `start` to kick off the periodic timer.
+  class check: aCheck :: HealthCheck interval: secs :: Integer threshold: n :: Integer listener: anActor :: EventListener -> Monitor =>
+    self spawnWith: #{
+      #check => aCheck,
+      #interval => secs,
+      #threshold => n,
+      #listener => anActor
+    }
+
+  // ===== Lifecycle =====
+
+  /// Run an immediate check and schedule a recurring `Timer every:` to
+  /// run subsequent checks every `interval` seconds. The timer block
+  /// sends `runCheck` back to this actor via `!` so the work executes
+  /// in the actor's mailbox, not on the Timer's process.
+  ///
+  /// Idempotent: calling `start` while a timer is already scheduled is a
+  /// no-op (the second call would otherwise leak the first timer).
+  start -> Nil =>
+    self.timer == nil
+      ifTrue: [
+        self runCheck
+        self.timer := Timer every: self.interval * 1000 do: [self runCheck!]
+      ]
+    nil
+
+  /// Cancel the recurring timer (if any). Safe to call when no timer
+  /// has been started — leaves state unchanged in that case.
+  ///
+  /// Named `stopMonitoring` rather than `stop` because `stop` is sealed
+  /// on `Actor` (used by the supervisor lifecycle).
+  stopMonitoring -> Nil =>
+    self.timer == nil
+      ifFalse: [
+        self.timer cancel
+        self.timer := nil
+      ]
+    nil
+
+  // ===== Check loop =====
+
+  /// Run the underlying check once and apply the threshold transition
+  /// rules. Records the result in `history`, updates `lastResult` and
+  /// `currentStatus`, and emits a `MonitorEvent` to the listener if the
+  /// status crossed a threshold.
+  ///
+  /// Returns the resulting status so callers (including tests) get a
+  /// synchronous reply — methods returning a non-`Nil` value are
+  /// dispatched as a `call`, not a fire-and-forget `cast`.
+  runCheck -> Symbol =>
+    healthCheck :: HealthCheck := self.check
+    result :: CheckResult := healthCheck check
+    previousStatus :: Symbol := self.currentStatus
+    self.lastResult := result
+    self.history := self trimHistory: (self.history add: result)
+    // Inline the success/failure branches: helper methods that return
+    // Nil get dispatched as casts on Actors (per Beamtalk's sync-by-
+    // default actor semantics), and the resulting state mutations
+    // would not be visible to the caller of `runCheck`.
+    result isOk
+      ifTrue: [
+        self.consecutiveFailures := 0
+        self.consecutiveRecoveries := self.consecutiveRecoveries + 1
+        (self.currentStatus == #fail and: [
+          self.consecutiveRecoveries >= self.threshold
+        ])
+          ifTrue: [
+            self.currentStatus := #ok
+            self.consecutiveRecoveries := 0
+            self notify: #recovered from: previousStatus
+          ]
+      ]
+      ifFalse: [
+        self.consecutiveRecoveries := 0
+        self.consecutiveFailures := self.consecutiveFailures + 1
+        (self.currentStatus /= #fail and: [
+          self.consecutiveFailures >= self.threshold
+        ])
+          ifTrue: [
+            self.currentStatus := #fail
+            self notify: #alert from: previousStatus
+          ]
+      ]
+    self.currentStatus
+
+  // ===== Notification =====
+
+  /// Send a `MonitorEvent` to the listener actor. The cast (`!`) makes
+  /// this fire-and-forget so a slow listener never stalls the monitor.
+  notify: type :: Symbol from: previousStatus :: Symbol -> Nil =>
+    event :: MonitorEvent := MonitorEvent
+      type: type
+      monitor: self
+      check: self.check
+      result: self.lastResult
+      previousStatus: previousStatus
+    self.listener handleEvent: event!
+    nil
+
+  // ===== Internal =====
+
+  /// Cap the history ring buffer at 50 entries (oldest dropped, newest
+  /// retained). Mirrors the bounded-buffer trim used elsewhere
+  /// (NotificationRouter.recentEvents, AlertLog.alerts).
+  trimHistory: results :: List(CheckResult) -> List(CheckResult) =>
+    results size > 50 ifTrue: [
+      results drop: results size - 50
+    ] ifFalse: [results]
+
+  // ===== Query interface =====
+
+  /// Current rolled-up status: `#unknown` until the first threshold is
+  /// crossed, then `#ok` or `#fail`.
+  status -> Symbol => self.currentStatus
+
+  /// Name of the underlying check (delegates to the HealthCheck).
+  checkName -> String => self.check name
+
+  /// Most recent CheckResult, or `nil` if `runCheck` has never run.
+  lastResult -> CheckResult | nil => self.lastResult
+
+  /// Bounded history of recent CheckResults (oldest first, newest last,
+  /// capped at 50).
+  history -> List(CheckResult) => self.history
+
+  /// Configured polling interval in seconds.
+  interval -> Integer => self.interval
+
+  /// Configured threshold (number of consecutive results required to
+  /// trigger a transition).
+  threshold -> Integer => self.threshold
+
+  /// Current count of consecutive failures since the last success.
+  consecutiveFailures -> Integer => self.consecutiveFailures
+
+  /// Current count of consecutive successes since the last failure.
+  consecutiveRecoveries -> Integer => self.consecutiveRecoveries

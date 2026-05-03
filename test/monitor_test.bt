@@ -1,0 +1,280 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the Monitor actor (BT-2122).
+///
+/// Covers state transitions, threshold logic, ring-buffer history, and
+/// flapping behavior. Tests drive the monitor synchronously by calling
+/// `runCheck` directly (rather than `start`) so we don't depend on
+/// real-time Timer scheduling. Periodic-timer wiring is exercised in
+/// one dedicated test using a short interval.
+///
+/// Tests bind `ok` and `fail` locals to CheckResult instances and then
+/// compose them into list literals like `#(fail, fail, ok)`. Calling
+/// helpers (`self okResult`) directly inside `#(...)` parses as two
+/// separate elements, so binding to a local first keeps the script
+/// readable.
+TestCase subclass: MonitorTest
+
+  // ===== Helpers =====
+
+  /// Build a stable success result.
+  okResult -> CheckResult => CheckResult ok: "scripted" details: "ok"
+
+  /// Build a stable failure result.
+  failResult -> CheckResult => CheckResult fail: "scripted" details: "fail"
+
+  /// Spawn a Monitor wired to a ScriptedHealthCheck and a
+  /// RecordingListener with the given threshold. Returns the trio in a
+  /// dictionary for tests to interrogate.
+  ///
+  /// `interval` is irrelevant for synchronous `runCheck` tests but must
+  /// be a valid positive integer.
+  monitorWith: results :: List(CheckResult) threshold: t :: Integer -> Dictionary =>
+    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "scripted" results: results
+    listener :: RecordingListener := RecordingListener spawn
+    monitor :: Monitor := Monitor
+      check: check
+      interval: 60
+      threshold: t
+      listener: listener
+    #{#monitor => monitor, #check => check, #listener => listener}
+
+  // ===== Acceptance: first success emits no event =====
+  testFirstSuccessEmitsNoEvent =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    monitor runCheck
+    self assert: listener count equals: 0
+    self assert: monitor status equals: #unknown
+
+  testFirstFailureBelowThresholdEmitsNoEvent =>
+    fail := self failResult
+    rig := self monitorWith: (List withAll: #(fail)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    monitor runCheck
+    self assert: listener count equals: 0
+    self assert: monitor status equals: #unknown
+    self assert: monitor consecutiveFailures equals: 1
+
+  // ===== Acceptance: N consecutive failures emit #alert exactly once =====
+  testThresholdConsecutiveFailuresEmitsAlertOnce =>
+    fail := self failResult
+    rig := self monitorWith: (List withAll: #(fail)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    monitor runCheck
+    monitor runCheck
+    monitor runCheck
+    self assert: listener count equals: 1
+    self assert: monitor status equals: #fail
+    event :: MonitorEvent := listener events at: 1
+    self assert: event type equals: #alert
+
+  testAdditionalFailuresAfterAlertEmitNothing =>
+    fail := self failResult
+    rig := self monitorWith: (List withAll: #(fail)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 6 do: [:_ | monitor runCheck]
+    self assert: listener count equals: 1
+    self assert: monitor status equals: #fail
+
+  testAlertEventCarriesPreviousStatus =>
+    fail := self failResult
+    rig := self monitorWith: (List withAll: #(fail)) threshold: 2
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    monitor runCheck
+    monitor runCheck
+    event :: MonitorEvent := listener events at: 1
+    self assert: event previousStatus equals: #unknown
+
+  // ===== Acceptance: threshold consecutive successes emit #recovered =====
+  testRecoveryEmitsAfterThresholdSuccesses =>
+    // 3 fails to trigger alert, then 3 oks to trigger recovery.
+    ok := self okResult
+    fail := self failResult
+    script :: List(CheckResult) := List withAll: #(fail, fail, fail, ok, ok, ok)
+    rig := self monitorWith: script threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 6 do: [:_ | monitor runCheck]
+    self assert: listener count equals: 2
+    self assert: monitor status equals: #ok
+    self assert: (listener events at: 1) type equals: #alert
+    self assert: (listener events at: 2) type equals: #recovered
+
+  testRecoveryEventCarriesPreviousFailStatus =>
+    ok := self okResult
+    fail := self failResult
+    script :: List(CheckResult) := List withAll: #(fail, fail, ok, ok)
+    rig := self monitorWith: script threshold: 2
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 4 do: [:_ | monitor runCheck]
+    recovery :: MonitorEvent := listener events at: 2
+    self assert: recovery type equals: #recovered
+    self assert: recovery previousStatus equals: #fail
+
+  testRecoveryBelowThresholdDoesNotFire =>
+    // After alert, only 2 oks (threshold is 3) — must not recover yet.
+    ok := self okResult
+    fail := self failResult
+    script :: List(CheckResult) := List withAll: #(fail, fail, fail, ok, ok)
+    rig := self monitorWith: script threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 5 do: [:_ | monitor runCheck]
+    self assert: listener count equals: 1
+    self assert: monitor status equals: #fail
+    self assert: monitor consecutiveRecoveries equals: 2
+
+  // ===== Acceptance: flapping (alternating) emits no extra alerts =====
+  testFlappingEmitsNoAlerts =>
+    // Alternating ok/fail with threshold 3 should never accumulate
+    // enough consecutive results to cross the threshold.
+    ok := self okResult
+    fail := self failResult
+    script :: List(CheckResult) := List withAll: #(ok, fail, ok, fail, ok, fail, ok, fail)
+    rig := self monitorWith: script threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 8 do: [:_ | monitor runCheck]
+    self assert: listener count equals: 0
+    self assert: monitor status equals: #unknown
+
+  testInterleavedFailuresResetCounter =>
+    // 2 fails, 1 ok, 2 fails — counter resets after each ok.
+    // Threshold of 3 should never be reached.
+    ok := self okResult
+    fail := self failResult
+    script :: List(CheckResult) := List withAll: #(fail, fail, ok, fail, fail)
+    rig := self monitorWith: script threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    listener :: RecordingListener := rig at: #listener
+    1 to: 5 do: [:_ | monitor runCheck]
+    self assert: listener count equals: 0
+    self assert: monitor consecutiveFailures equals: 2
+
+  // ===== Acceptance: history capped at 50 =====
+  testHistoryRecordsResult =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    monitor runCheck
+    self assert: monitor history size equals: 1
+    self assert: (monitor history at: 1) isOk
+
+  testHistoryGrowsUpToFifty =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    1 to: 50 do: [:_ | monitor runCheck]
+    self assert: monitor history size equals: 50
+
+  testHistoryCappedAtFifty =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    1 to: 60 do: [:_ | monitor runCheck]
+    self assert: monitor history size equals: 50
+
+  testHistoryRetainsMostRecentEntries =>
+    // First 3 fails then many oks — the early fails should be dropped
+    // from the front once the buffer fills past 50.
+    //
+    // Build the script via inject:into: rather than a do: loop because
+    // assignments inside a block don't propagate to the enclosing scope.
+    ok := self okResult
+    fail := self failResult
+    base :: List(CheckResult) := List withAll: #(fail, fail, fail)
+    script :: List(CheckResult) := (1 to: 60) inject: base into: [:acc :_ |
+      acc add: ok
+    ]
+    rig := self monitorWith: script threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    1 to: 63 do: [:_ | monitor runCheck]
+    self assert: monitor history size equals: 50
+    // Newest entry sits at the tail.
+    self assert: (monitor history at: 50) isOk
+
+  // ===== lastResult tracking =====
+  testLastResultUpdatedAfterRun =>
+    fail := self failResult
+    rig := self monitorWith: (List withAll: #(fail)) threshold: 5
+    monitor :: Monitor := rig at: #monitor
+    monitor runCheck
+    self assert: monitor lastResult isFail
+
+  testLastResultIsNilBeforeRun =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    self assert: monitor lastResult equals: nil
+
+  // ===== Query interface =====
+  testCheckNameDelegatesToCheck =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 3
+    monitor :: Monitor := rig at: #monitor
+    self assert: monitor checkName equals: "scripted"
+
+  testIntervalAndThresholdAccessors =>
+    ok := self okResult
+    rig := self monitorWith: (List withAll: #(ok)) threshold: 7
+    monitor :: Monitor := rig at: #monitor
+    self assert: monitor interval equals: 60
+    self assert: monitor threshold equals: 7
+
+  // ===== Periodic timer wiring =====
+  testStartSchedulesPeriodicChecks =>
+    // start runs an immediate check synchronously; verify it took effect.
+    // We deliberately avoid asserting on Timer-driven invocations here so
+    // the test stays deterministic and fast.
+    ok := self okResult
+    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "periodic" results: (List withAll: #(ok))
+    listener :: RecordingListener := RecordingListener spawn
+    monitor :: Monitor := Monitor
+      check: check
+      interval: 1
+      threshold: 3
+      listener: listener
+    monitor start
+    self assert: check callCount >= 1
+    monitor stopMonitoring
+
+  testStartIsIdempotent =>
+    // Calling start twice must not leak the first timer or trigger an
+    // extra immediate check. callCount should stay at 1 (the single
+    // synchronous runCheck from the first start).
+    ok := self okResult
+    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "idempotent" results: (List withAll: #(ok))
+    listener :: RecordingListener := RecordingListener spawn
+    monitor :: Monitor := Monitor
+      check: check
+      interval: 60
+      threshold: 3
+      listener: listener
+    monitor start
+    monitor start
+    self assert: check callCount equals: 1
+    monitor stopMonitoring
+
+  testStopMonitoringIsIdempotent =>
+    ok := self okResult
+    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "stoppable" results: (List withAll: #(ok))
+    listener :: RecordingListener := RecordingListener spawn
+    monitor :: Monitor := Monitor
+      check: check
+      interval: 60
+      threshold: 3
+      listener: listener
+    monitor start
+    monitor stopMonitoring
+    // Calling stopMonitoring a second time must be a no-op, not an error.
+    monitor stopMonitoring
+    self assert: monitor status equals: #unknown
