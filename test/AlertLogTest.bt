@@ -1,0 +1,158 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the AlertLog actor (BT-2125).
+///
+/// Covers: ordering (newest first), `recent: n` slice, `forCheck:` filter,
+/// `since:` filter, and `maxSize` cap behavior when exceeding 1000.
+TestCase subclass: AlertLogTest
+
+  /// Helper: build an Alert with the given fields. Other fields default to
+  /// values acceptable for queries that don't read them.
+  alertNamed: name :: String at: timestamp :: String -> Alert =>
+    Alert
+      fromWebhook: #{
+        "type" => "alert",
+        "check" => name,
+        "target" => "host:" ++ name,
+        "status" => "fail",
+        "details" => "synthetic",
+        "previousStatus" => "ok",
+        "timestamp" => timestamp
+      }
+
+  // --- Empty log ---
+  testNewLogIsEmpty =>
+    log := AlertLog spawn
+    self assert: log count equals: 0
+    self assert: (log recent: 5) equals: #()
+
+  // --- Recording / ordering ---
+  testRecordIncrementsCount =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:00Z")
+    self assert: log count equals: 1
+    log record: (self alertNamed: "db" at: "2026-05-03T10:00:01Z")
+    self assert: log count equals: 2
+
+  testAlertsAreNewestFirst =>
+    log := AlertLog spawn
+    a1 := self alertNamed: "first" at: "2026-05-03T10:00:00Z"
+    a2 := self alertNamed: "second" at: "2026-05-03T10:00:01Z"
+    a3 := self alertNamed: "third" at: "2026-05-03T10:00:02Z"
+    log record: a1
+    log record: a2
+    log record: a3
+    list :: List := log recent: 3
+    self assert: (list at: 1) checkName equals: "third"
+    self assert: (list at: 2) checkName equals: "second"
+    self assert: (list at: 3) checkName equals: "first"
+
+  // --- recent: ---
+  testRecentSlicesToN =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "a" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "b" at: "2026-05-03T10:00:01Z")
+    log record: (self alertNamed: "c" at: "2026-05-03T10:00:02Z")
+    log record: (self alertNamed: "d" at: "2026-05-03T10:00:03Z")
+    list :: List := log recent: 2
+    self assert: list size equals: 2
+    self assert: (list at: 1) checkName equals: "d"
+    self assert: (list at: 2) checkName equals: "c"
+
+  testRecentLargerThanLogReturnsAll =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "only" at: "2026-05-03T10:00:00Z")
+    list :: List := log recent: 100
+    self assert: list size equals: 1
+
+  testRecentZeroReturnsEmpty =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "x" at: "2026-05-03T10:00:00Z")
+    self assert: (log recent: 0) equals: #()
+
+  // --- forCheck: ---
+  testForCheckFiltersByName =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "db" at: "2026-05-03T10:00:01Z")
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:02Z")
+    log record: (self alertNamed: "db" at: "2026-05-03T10:00:03Z")
+    apiAlerts :: List := log forCheck: "api"
+    self assert: apiAlerts size equals: 2
+    self assert: (apiAlerts at: 1) checkName equals: "api"
+    self assert: (apiAlerts at: 2) checkName equals: "api"
+
+  testForCheckPreservesNewestFirst =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "db" at: "2026-05-03T10:00:01Z")
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:02Z")
+    apiAlerts :: List := log forCheck: "api"
+    self assert: (apiAlerts at: 1) timestamp equals: "2026-05-03T10:00:02Z"
+    self assert: (apiAlerts at: 2) timestamp equals: "2026-05-03T10:00:00Z"
+
+  testForCheckUnknownReturnsEmpty =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "api" at: "2026-05-03T10:00:00Z")
+    self assert: (log forCheck: "missing") equals: #()
+
+  // --- since: ---
+  testSinceReturnsAlertsAtOrAfterCutoff =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "a" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "b" at: "2026-05-03T10:00:01Z")
+    log record: (self alertNamed: "c" at: "2026-05-03T10:00:02Z")
+    recent :: List := log since: "2026-05-03T10:00:01Z"
+    self assert: recent size equals: 2
+    self assert: (recent at: 1) checkName equals: "c"
+    self assert: (recent at: 2) checkName equals: "b"
+
+  testSinceFutureCutoffReturnsEmpty =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "a" at: "2026-05-03T10:00:00Z")
+    self assert: (log since: "2099-01-01T00:00:00Z") equals: #()
+
+  testSincePastCutoffReturnsAll =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "a" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "b" at: "2026-05-03T10:00:01Z")
+    self assert: (log since: "2000-01-01T00:00:00Z") size equals: 2
+
+  // --- maxSize cap ---
+  testCountStaysAtMaxSize =>
+    // Spawn with a small maxSize so the test runs fast while still
+    // exercising the same truncation code path used at the 1000 default.
+    log := AlertLog spawnWith: #{#maxSize => 5}
+    1 to: 10 do: [:i |
+      log record: (self alertNamed: "c" ++ i printString at: i printString)
+    ]
+    self assert: log count equals: 5
+
+  testOldestEntriesAreDroppedFirst =>
+    log := AlertLog spawnWith: #{#maxSize => 3}
+    log record: (self alertNamed: "first" at: "01")
+    log record: (self alertNamed: "second" at: "02")
+    log record: (self alertNamed: "third" at: "03")
+    log record: (self alertNamed: "fourth" at: "04")
+    list :: List := log recent: 10
+    self assert: list size equals: 3
+    self assert: (list at: 1) checkName equals: "fourth"
+    self assert: (list at: 2) checkName equals: "third"
+    self assert: (list at: 3) checkName equals: "second"
+
+  testCapAtSpecDefaultOf1000 =>
+    // Verifies the default cap from SPEC §8 truncates at 1000 entries.
+    log := AlertLog spawn
+    1 to: 1005 do: [:i | log record: (self alertNamed: "c" at: i printString)]
+    self assert: log count equals: 1000
+
+  // --- clear ---
+  testClearEmptiesTheLog =>
+    log := AlertLog spawn
+    log record: (self alertNamed: "a" at: "2026-05-03T10:00:00Z")
+    log record: (self alertNamed: "b" at: "2026-05-03T10:00:01Z")
+    self assert: log count equals: 2
+    log clear
+    self assert: log count equals: 0
+    self assert: (log recent: 10) equals: #()
