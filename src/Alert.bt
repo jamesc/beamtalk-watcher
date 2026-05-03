@@ -1,0 +1,35 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Alert — immutable value object representing a received webhook alert.
+/// See SPEC.md section 9.
+sealed typed Value subclass: Alert
+  field: type :: String = ""
+  field: checkName :: String = ""
+  field: target :: String = ""
+  field: status :: String = ""
+  field: details :: String = ""
+  field: previousStatus :: String = ""
+  field: timestamp :: String | nil = nil
+  field: receivedAt :: DateTime | nil = nil
+
+  /// Build an Alert from a parsed webhook Dictionary.
+  /// The dictionary uses string keys matching the WebhookChannel JSON format.
+  class fromWebhook: data :: Dictionary -> Alert =>
+    self
+      new: #{
+        #type => data at: "type",
+        #checkName => data at: "check",
+        #target => data at: "target",
+        #status => data at: "status",
+        #details => data at: "details",
+        #previousStatus => data at: "previousStatus",
+        #timestamp => data at: "timestamp",
+        #receivedAt => DateTime now
+      }
+
+  /// True when this alert represents a failure notification.
+  isAlert -> Boolean => self.type == "alert"
+
+  /// True when this alert represents a recovery notification.
+  isRecovery -> Boolean => self.type == "recovered"
