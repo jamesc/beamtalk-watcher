@@ -6,3 +6,4 @@ name = "beamtalk_watcher"
 version = "0.1.0"
 
 [dependencies]
+http = { git = "https://github.com/jamesc/beamtalk-http", branch = "main" }

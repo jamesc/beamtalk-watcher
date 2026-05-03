@@ -1,0 +1,15 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+/// HealthCheck — protocol for objects that can be polled by a Monitor.
+///
+/// Implementors run a check against some target and report the outcome
+/// as a `CheckResult`. Concrete implementations include `HttpHealthCheck`
+/// (HTTP GET), `TcpPortCheck` (TCP connect), and `ProcessCheck` (BEAM
+/// process liveness). See SPEC.md section 1.
+Protocol define: HealthCheck
+  /// Run the check and return a CheckResult describing the outcome.
+  check -> CheckResult
+  /// Human-readable name for this check (used in alerts and logs).
+  name -> String
+  /// String describing the thing being checked (URL, host:port, process name, ...).
+  target -> String

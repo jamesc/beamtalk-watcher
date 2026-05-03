@@ -1,0 +1,136 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for HttpHealthCheck (BT-2121).
+///
+/// Spins up an in-process HTTPServer on an ephemeral port, points an
+/// HttpHealthCheck at it, and asserts the resulting CheckResult.
+///
+/// Coverage: 200 OK, 500 fail, body-contains hit/miss, request timeout,
+/// connection refused (port chosen so nothing is listening).
+TestCase subclass: HttpHealthCheckTest
+  field: srv = nil
+
+  tearDown =>
+    self.srv isNil
+      ifFalse: [
+        self.srv stop
+        self.srv := nil
+      ]
+
+  // ----- helpers -----
+
+  /// Build a URL of the form `http://127.0.0.1:<port><path>` against `self.srv`.
+  urlFor: path :: String -> String =>
+    "http://127.0.0.1:" ++ self.srv port asString ++ path
+
+  // ----- field defaults -----
+  testDefaultsForNewInstance =>
+    check := HttpHealthCheck new
+    self assert: check url equals: ""
+    self assert: check expectedStatus equals: 200
+    self assert: check bodyContains equals: nil
+    self assert: check timeout equals: 5000
+
+  testFactorySetsUrl =>
+    check := HttpHealthCheck url: "http://example.test/"
+    self assert: check url equals: "http://example.test/"
+    self assert: check expectedStatus equals: 200
+
+  testNameAndTargetReflectUrl =>
+    check := HttpHealthCheck url: "http://example.test/health"
+    self assert: check name equals: "HTTP http://example.test/health"
+    self assert: check target equals: "http://example.test/health"
+
+  // ----- 200 OK happy path -----
+  test200OkProducesOkResult =>
+    self.srv := HTTPServer start: 0 handler: [:req |
+      HTTPResponse new: #{#status => 200, #body => "ok"}
+    ]
+    check := HttpHealthCheck url: (self urlFor: "/health")
+    result := check check
+    self assert: result isOk
+    self assert: result details equals: "HTTP 200"
+
+  // ----- 500 → fail with status mismatch -----
+  test500ProducesFailResult =>
+    self.srv := HTTPServer start: 0 handler: [:req |
+      HTTPResponse new: #{#status => 500, #body => "boom"}
+    ]
+    check := HttpHealthCheck url: (self urlFor: "/oops")
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "500")
+    self assert: (result details includesSubstring: "200")
+
+  // ----- explicit non-default expected status (e.g. 204 No Content) -----
+  testCustomExpectedStatusMatches =>
+    self.srv := HTTPServer start: 0 handler: [:req |
+      HTTPResponse new: #{#status => 204, #body => ""}
+    ]
+    check := HttpHealthCheck url: (self urlFor: "/no-content") expectedStatus: 204
+    result := check check
+    self assert: result isOk
+
+  // ----- body contains: match -----
+  testBodyContainsMatch =>
+    self.srv := HTTPServer start: 0 handler: [:req |
+      HTTPResponse new: #{#status => 200, #body => "\{""status"":""ok""}"}
+    ]
+    check := HttpHealthCheck
+      url: (self urlFor: "/api")
+      expectedStatus: 200
+      bodyContains: """status"":""ok"""
+      timeout: 5000
+    result := check check
+    self assert: result isOk
+
+  // ----- body contains: miss -----
+  testBodyContainsMiss =>
+    self.srv := HTTPServer
+      start: 0
+      handler: [:req |
+        HTTPResponse new: #{
+          #status => 200,
+          #body => "\{""status"":""degraded""}"
+        }
+      ]
+    check := HttpHealthCheck
+      url: (self urlFor: "/api")
+      expectedStatus: 200
+      bodyContains: """status"":""ok"""
+      timeout: 5000
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "Body did not contain")
+
+  // ----- timeout: server delays longer than the check timeout -----
+  testTimeoutProducesFailResult =>
+    self.srv := HTTPServer
+      start: 0
+      handler: [:req |
+        // Sleep well beyond the 100ms check timeout below, then respond.
+        (Erlang timer) sleep: 1500
+        HTTPResponse new: #{#status => 200, #body => "late"}
+      ]
+    check := HttpHealthCheck
+      url: (self urlFor: "/slow")
+      expectedStatus: 200
+      bodyContains: nil
+      timeout: 100
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "HTTP error")
+
+  // ----- connection refused: nothing listening on this URL -----
+  testConnectionRefusedProducesFailResult =>
+    // Port 1 is reserved (TCPMUX) and effectively never listening on dev hosts —
+    // use that to provoke a connection-refused error without racing port allocation.
+    check := HttpHealthCheck
+      url: "http://127.0.0.1:1/"
+      expectedStatus: 200
+      bodyContains: nil
+      timeout: 1000
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "HTTP error")
