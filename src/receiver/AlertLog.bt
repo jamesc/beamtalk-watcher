@@ -1,0 +1,49 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// AlertLog — Actor that stores received Alerts for query by the dashboard
+/// and REPL. See SPEC.md section 8.
+///
+/// Alerts are kept newest-first. The log is bounded by `maxSize` (default
+/// 1000); on overflow the oldest entries are dropped.
+typed Actor subclass: AlertLog
+  state: alerts :: List = #()
+  state: maxSize :: Integer = 1000
+
+  /// Record a new alert at the head of the log. The log is truncated to
+  /// `maxSize` entries (oldest dropped) when it would otherwise exceed it.
+  record: alert :: Alert -> Nil =>
+    self.alerts := (self.alerts addFirst: alert) take: self.maxSize
+    nil
+
+  /// Return the `n` most recently recorded alerts (newest first). If fewer
+  /// than `n` alerts have been recorded, returns all of them.
+  recent: n :: Integer -> List => self.alerts take: n
+
+  /// Return all recorded alerts whose `checkName` matches `name`,
+  /// preserving newest-first order.
+  forCheck: name :: String -> List =>
+    self.alerts
+      select: [:a |
+        @expect type
+        a checkName == name
+      ]
+
+  /// Return all recorded alerts whose `timestamp` is greater than or equal
+  /// to `cutoff`, preserving newest-first order. Alerts whose timestamp is
+  /// nil are excluded.
+  since: cutoff :: String -> List =>
+    self.alerts
+      select: [:a |
+        @expect type
+        ts := a timestamp
+        ts /= nil and: [ts >= cutoff]
+      ]
+
+  /// Total number of alerts currently stored.
+  count -> Integer => self.alerts size
+
+  /// Drop every recorded alert.
+  clear -> Nil =>
+    self.alerts := #()
+    nil
