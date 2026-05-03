@@ -64,7 +64,7 @@ sealed typed Value subclass: HttpHealthCheck
         // The Result error payload is opaque (HTTP backend may surface
         // an atom like #timeout or a tuple) — type-erase here to keep
         // the typed-class check happy, then format via printString.
-        @expect type 
+        @expect type
         self errorResultFor: err
       ]
 
