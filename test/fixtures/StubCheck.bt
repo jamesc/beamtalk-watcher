@@ -1,0 +1,20 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Stub HealthCheck used by WebhookChannelTest.
+///
+/// Provides `name` and `target` so that WebhookChannel.buildPayload: can
+/// access both fields from the event's check object.
+sealed typed Value subclass: StubCheck
+  field: name :: String = ""
+  field: target :: String = ""
+
+  /// Build a StubCheck with both name and target.
+  class name: aName :: String target: aTarget :: String -> StubCheck =>
+    self new: #{#name => aName, #target => aTarget}
+
+  /// The check name (matches HealthCheck protocol).
+  name -> String => self.name
+
+  /// The check target (matches HealthCheck protocol).
+  target -> String => self.target

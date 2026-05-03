@@ -1,0 +1,109 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// WebhookChannel — Actor that delivers MonitorEvents as JSON POST
+/// requests to a configured URL with exponential-backoff retry.
+///
+/// Encodes each event as a JSON object with fields: `type`, `check`,
+/// `target`, `status`, `details`, `previousStatus`, `timestamp`.
+/// On transport error or 5xx response, retries up to `maxRetries`
+/// times with exponential backoff starting at `retryDelay` ms.
+///
+/// See SPEC.md §6.
+typed Actor subclass: WebhookChannel
+  state: url :: String = ""
+  state: headers :: List(String) = #()
+  state: maxRetries :: Integer = 3
+  state: retryDelay :: Integer = 1000
+  state: timeout :: Integer = 5000
+  state: pendingCount :: Integer = 0
+
+  // ===== Class-side factories =====
+
+  /// Spawn a WebhookChannel targeting `aUrl` with default headers.
+  class url: aUrl :: String -> WebhookChannel => self spawnWith: #{#url => aUrl}
+
+  /// Spawn a WebhookChannel targeting `aUrl` with extra headers.
+  class url: aUrl :: String headers: hdrs :: List(String) -> WebhookChannel =>
+    self spawnWith: #{#url => aUrl, #headers => hdrs}
+
+  // ===== Public interface =====
+
+  /// Deliver a MonitorEvent as a JSON POST to the configured URL.
+  /// Builds the payload and begins the retry cycle synchronously.
+  /// Callers (NotificationRouter) should invoke via `!` (cast) so
+  /// the HTTP I/O does not block their own actor.
+  deliver: event :: MonitorEvent -> WebhookChannel =>
+    payload := self buildPayload: event
+    self.pendingCount := self.pendingCount + 1
+    self doSend: payload attempt: 1
+    self
+
+  /// Number of in-flight deliveries (pending retries).
+  pending -> Integer => self.pendingCount
+
+  // ===== Internal retry logic =====
+
+  /// Attempt to POST `payload` to `self.url`. Delegates to `doSend:attempt:`
+  /// which handles the actual HTTP call and retry scheduling.
+  sendWithRetry: payload :: String attempt: n :: Integer -> WebhookChannel =>
+    self doSend: payload attempt: n
+
+  /// Perform the HTTP POST and handle the result. Called from deliver:
+  /// and from Timer retry callbacks. On success (2xx), decrements
+  /// pendingCount. On 5xx or transport error, retries with exponential
+  /// backoff if attempts remain, otherwise gives up.
+  doSend: payload :: String attempt: n :: Integer -> WebhookChannel =>
+    result := HTTPClient
+      request: #post
+      url: self.url
+      options: #{#timeout => self.timeout, #body => payload}
+    shouldRetry := result isError ifTrue: [true] ifFalse: [result unwrap ok not]
+    shouldRetry
+      ifFalse: [
+        self.pendingCount := self.pendingCount - 1
+        ^self
+      ]
+    n < self.maxRetries
+      ifTrue: [
+        delay := self.retryDelay * (2 raisedTo: n - 1)
+        Timer after: delay do: [self doSend: payload attempt: n + 1!]
+      ]
+      ifFalse: [self.pendingCount := self.pendingCount - 1]
+    self
+
+  // ===== Payload construction =====
+
+  /// Build a JSON string from a MonitorEvent matching the SPEC §6 schema.
+  buildPayload: event :: MonitorEvent -> String =>
+    status := event result isNil ifTrue: [
+      "unknown"
+    ] ifFalse: [event result status printString]
+    details := event result isNil ifTrue: [""] ifFalse: [event result details]
+    Json
+      generate: #{
+        "type" => event type printString,
+        "check" => event check name,
+        "target" => event check target,
+        "status" => status,
+        "details" => details,
+        "previousStatus" => event previousStatus printString,
+        "timestamp" => event timestamp printString
+      }
+
+  // ===== Accessors =====
+
+  /// The configured webhook URL.
+  url -> String => self.url
+
+  /// The configured extra headers.
+  headers -> List(String) => self.headers
+
+  /// Maximum number of retry attempts per delivery.
+  maxRetries -> Integer => self.maxRetries
+
+  /// Base retry delay in milliseconds.
+  retryDelay -> Integer => self.retryDelay
+
+  /// HTTP request timeout in milliseconds.
+  timeout -> Integer => self.timeout

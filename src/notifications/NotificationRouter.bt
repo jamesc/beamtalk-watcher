@@ -56,6 +56,6 @@ typed Actor subclass: NotificationRouter
 
   /// Read-only accessor for tests and inspection.
   channels -> List(Actor) => self.channels
-  
+
   /// Read-only accessor for tests and inspection.
   recentEvents -> List(MonitorEvent) => self.recentEvents
