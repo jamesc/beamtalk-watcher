@@ -18,15 +18,15 @@ typed Actor subclass: NotificationRouter
   state: recentEvents :: List(MonitorEvent) = #()
 
   /// Register a channel actor. Subsequent events will be forwarded to it.
-  addChannel: channel :: Actor -> List(Actor) =>
+  addChannel: channel :: Actor -> NotificationRouter =>
     self.channels := self.channels add: channel
-    self.channels
+    self
 
   /// Unregister a channel actor. Identity comparison via `=:=`.
-  removeChannel: channel :: Actor -> List(Actor) =>
+  removeChannel: channel :: Actor -> NotificationRouter =>
     @expect type
     self.channels := self.channels reject: [:c | c =:= channel]
-    self.channels
+    self
 
   /// Receive a MonitorEvent. Dedup against recent events; fan out to
   /// every channel if not a duplicate.

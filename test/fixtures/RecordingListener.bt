@@ -10,9 +10,9 @@ typed Actor subclass: RecordingListener
   state: events :: List(MonitorEvent) = #()
 
   /// Record an incoming MonitorEvent (EventListener protocol).
-  handleEvent: event :: MonitorEvent -> List(MonitorEvent) =>
+  handleEvent: event :: MonitorEvent -> RecordingListener =>
     self.events := self.events add: event
-    self.events
+    self
 
   /// All events recorded so far (oldest first).
   events -> List(MonitorEvent) => self.events

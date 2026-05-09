@@ -97,16 +97,18 @@ typed Actor subclass: Monitor
   /// Returns the resulting status so callers (including tests) get a
   /// synchronous reply — methods returning a non-`Nil` value are
   /// dispatched as a `call`, not a fire-and-forget `cast`.
+  ///
+  /// The success/failure branches are inlined here rather than extracted
+  /// into helper methods because actor self-calls with non-Nil return
+  /// types are dispatched synchronously, causing re-entrant deadlock.
+  /// Self-calls returning Nil are async casts whose state mutations
+  /// would not be visible to the caller. See memory: actor_self_calls.
   runCheck -> Symbol =>
     healthCheck :: HealthCheck := self.check
     result :: CheckResult := healthCheck check
     previousStatus :: Symbol := self.currentStatus
     self.lastResult := result
     self.history := self trimHistory: (self.history add: result)
-    // Inline the success/failure branches: helper methods that return
-    // Nil get dispatched as casts on Actors (per Beamtalk's sync-by-
-    // default actor semantics), and the resulting state mutations
-    // would not be visible to the caller of `runCheck`.
     result isOk
       ifTrue: [
         self.consecutiveFailures := 0
