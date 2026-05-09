@@ -1,0 +1,181 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Watcher — Top-level application actor that wires together every
+/// subsystem of beamtalk-watcher.
+///
+/// Composition:
+///   * `AlertLog`            — stores incoming webhook alerts.
+///   * `NotificationRouter`  — fan-out for outgoing alerts (`MonitorEvent`s).
+///   * `CheckRegistry`       — manages per-check `Monitor` actors.
+///   * `WebhookChannel`      — optional outbound channel; added to the router
+///                             when `#webhookUrl` is non-nil.
+///   * `WebhookReceiver`     — HTTP server that accepts inbound webhooks and
+///                             records them on the AlertLog.
+///   * `Dashboard`           — HTTP server with a web UI and JSON API for
+///                             the registry and AlertLog.
+///
+/// Use `Watcher start` to bring everything up on default ports
+/// (dashboard 8080, receiver 8081, no checks). Use
+/// `Watcher startWith: aConfig` to supply a custom configuration:
+///
+/// ```beamtalk
+/// w := Watcher startWith: #{
+///   #dashboardPort => 0,
+///   #receiverPort => 0,
+///   #webhookUrl   => "https://hooks.example.com/alerts",
+///   #checks       => #(
+///     #{ #type => #http, #name => #api,
+///        #url => "http://localhost:3000/health",
+///        #interval => 15, #threshold => 2 },
+///     #{ #type => #tcp, #name => #postgres,
+///        #host => "localhost", #port => 5432 }
+///   )
+/// }
+/// ```
+///
+/// Pass `0` for `#dashboardPort` / `#receiverPort` to bind an OS-assigned
+/// ephemeral port (useful in tests). Resolved ports are then available via
+/// `w dashboard port` and `w receiver port`.
+///
+/// See SPEC.md §12.
+typed Actor subclass: Watcher
+  state: registry :: CheckRegistry | nil = nil
+  state: router :: NotificationRouter | nil = nil
+  state: alertLog :: AlertLog | nil = nil
+  state: receiver :: WebhookReceiver | nil = nil
+  state: dashboard :: Dashboard | nil = nil
+  state: config :: Dictionary = #{}
+
+  // ===== Class-side factories =====
+
+  /// Spawn a Watcher with default configuration (dashboard on 8080,
+  /// receiver on 8081, no outbound webhook, no checks).
+  class start -> Watcher => self startWith: self defaultConfig
+
+  /// Spawn a Watcher with the supplied configuration. Brings up the alert
+  /// log, router, registry, optional outbound webhook channel, receiver,
+  /// and dashboard, then registers each entry of `#checks` via
+  /// `addCheckFromConfig:`.
+  class startWith: aConfig :: Dictionary -> Watcher =>
+    watcher :: Watcher := self spawnWith: #{#config => aConfig}
+    watcher bringUp: aConfig
+
+  /// Default configuration. Override via `startWith:`.
+  class defaultConfig -> Dictionary =>
+    #{
+      #dashboardPort => 8080,
+      #receiverPort => 8081,
+      #webhookUrl => nil,
+      #checks => #()
+    }
+
+  // ===== Composition =====
+
+  /// Bring up every sub-actor and register the configured checks. Called
+  /// once by `startWith:` after the Watcher itself has been spawned.
+  /// Returns self so the caller can hold a reference to the live Watcher.
+  bringUp: aConfig :: Dictionary -> Watcher =>
+    log :: AlertLog := AlertLog spawn
+    rtr :: NotificationRouter := NotificationRouter spawn
+    reg :: CheckRegistry := CheckRegistry start: rtr
+    self.alertLog := log
+    self.router := rtr
+    self.registry := reg
+
+    webhookUrl := aConfig at: #webhookUrl ifAbsent: [nil]
+    webhookUrl isNil
+      ifFalse: [
+        channel :: WebhookChannel := WebhookChannel url: webhookUrl
+        rtr addChannel: channel
+      ]
+
+    receiverPort :: Integer := aConfig at: #receiverPort ifAbsent: [8081]
+    self.receiver := WebhookReceiver start: receiverPort alertLog: log
+
+    dashPort :: Integer := aConfig at: #dashboardPort ifAbsent: [8080]
+    self.dashboard := Dashboard
+      start: dashPort
+      registry: reg
+      alertLog: log
+
+    checks :: List(Dictionary) := aConfig at: #checks ifAbsent: [#()]
+    checks do: [:checkConfig | self addCheckFromConfig: checkConfig]
+    self
+
+  /// Register a single check from a config dictionary. Recognised keys:
+  ///   * `#type`      — `#http` | `#tcp` | `#process` (required)
+  ///   * `#name`      — Symbol used as the registry key (required)
+  ///   * `#url`       — for `#http` checks (required when `#type == #http`)
+  ///   * `#host`      — for `#tcp` checks
+  ///   * `#port`      — for `#tcp` checks
+  ///   * `#process`   — name (Symbol or String) for `#process` checks
+  ///   * `#interval`  — polling interval in seconds (default 30)
+  ///   * `#threshold` — consecutive results before transition (default 3)
+  ///
+  /// Returns self to keep the actor self-call synchronous so `bringUp:`
+  /// observes the registration before returning.
+  addCheckFromConfig: checkConfig :: Dictionary -> Watcher =>
+    type :: Symbol := checkConfig at: #type
+    // Each branch returns a concrete sealed Value class; `@expect type`
+    // suppresses the structural-protocol mismatch on the union assignment.
+    // Unknown `#type` raises rather than silently falling through to a
+    // ProcessCheck (which would itself fail on the missing `#process` key
+    // with a confusing `KeyNotFound` error far from the misconfiguration).
+    @expect type
+    check :: HealthCheck := type == #http
+      ifTrue: [HttpHealthCheck url: (checkConfig at: #url)]
+      ifFalse: [
+        type == #tcp
+          ifTrue: [
+            TcpPortCheck host: (checkConfig at: #host) port: (checkConfig at: #port)
+          ]
+          ifFalse: [
+            type == #process ifTrue: [
+              ProcessCheck name: (checkConfig at: #process)
+            ] ifFalse: [
+              ^Error signal: "Unknown check type: " ++ type printString
+            ]
+          ]
+      ]
+    self.registry
+      add: check
+      name: (checkConfig at: #name)
+      interval: (checkConfig at: #interval ifAbsent: [30])
+      threshold: (checkConfig at: #threshold ifAbsent: [3])
+    self
+
+  // ===== Accessors =====
+
+  /// The CheckRegistry — primary entry point for adding and querying checks.
+  registry -> CheckRegistry | nil => self.registry
+
+  /// The NotificationRouter — add outbound channels via `addChannel:`.
+  router -> NotificationRouter | nil => self.router
+
+  /// The AlertLog — query received webhook alerts via `recent:`.
+  alertLog -> AlertLog | nil => self.alertLog
+
+  /// The WebhookReceiver — bound HTTP server for inbound webhooks.
+  receiver -> WebhookReceiver | nil => self.receiver
+
+  /// The Dashboard — HTTP server with the web UI and JSON API.
+  dashboard -> Dashboard | nil => self.dashboard
+
+  /// The configuration dictionary supplied to `startWith:`.
+  config -> Dictionary => self.config
+
+  // ===== Lifecycle =====
+
+  /// Stop the dashboard and receiver HTTP servers and every Monitor that
+  /// the registry has spawned. Safe to call multiple times — each
+  /// sub-actor's shutdown is itself idempotent.
+  shutdown -> Watcher =>
+    self.dashboard isNil ifFalse: [self.dashboard shutdown]
+    self.receiver isNil ifFalse: [self.receiver shutdown]
+    self.registry isNil ifFalse: [
+      self.registry names do: [:name |
+        (self.registry monitor: name) stopMonitoring
+      ]
+    ]
+    self

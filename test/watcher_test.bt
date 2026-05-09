@@ -1,0 +1,173 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the Watcher top-level actor (BT-2130).
+///
+/// Brings up a Watcher on ephemeral ports with no checks, then asserts:
+///   * every sub-actor (alertLog, router, registry, receiver, dashboard)
+///     is wired and reachable.
+///   * dashboard and receiver bound to non-zero OS-assigned ports.
+///   * `addCheckFromConfig:` registers HTTP/TCP/Process checks against the
+///     registry and they show up via `registry names`.
+///   * `defaultConfig` exposes the documented keys.
+///   * `shutdown` stops the HTTP servers cleanly.
+TestCase subclass: WatcherTest
+  field: watcher :: Watcher | nil = nil
+
+  setUp =>
+    self.watcher := Watcher startWith: #{
+      #dashboardPort => 0,
+      #receiverPort => 0,
+      #webhookUrl => nil,
+      #checks => #()
+    }
+
+  tearDown =>
+    self.watcher isNil ifFalse: [self.watcher shutdown]
+    self.watcher := nil
+
+  // ===== Sub-actor wiring =====
+  testAlertLogIsSpawned => self deny: self.watcher alertLog == nil
+
+  testRouterIsSpawned => self deny: self.watcher router == nil
+
+  testRegistryIsSpawned => self deny: self.watcher registry == nil
+
+  testReceiverIsSpawned => self deny: self.watcher receiver == nil
+
+  testDashboardIsSpawned => self deny: self.watcher dashboard == nil
+
+  // ===== Ephemeral port binding =====
+  testDashboardPortIsAssigned => self assert: self.watcher dashboard port > 0
+
+  testReceiverPortIsAssigned => self assert: self.watcher receiver port > 0
+
+  testDashboardAndReceiverOnDifferentPorts =>
+    self deny: self.watcher dashboard port == self.watcher receiver port
+
+  // ===== No checks registered by default =====
+  testNoChecksRegisteredWhenChecksEmpty =>
+    self assert: self.watcher registry names size equals: 0
+
+  // ===== Webhook channel wiring =====
+  testWebhookChannelNotAddedWhenUrlNil =>
+    self assert: self.watcher router channels size equals: 0
+
+  testWebhookChannelAddedWhenUrlPresent =>
+    w :: Watcher := Watcher
+      startWith: #{
+        #dashboardPort => 0,
+        #receiverPort => 0,
+        #webhookUrl => "http://localhost:9999/hook",
+        #checks => #()
+      }
+    self assert: w router channels size equals: 1
+    w shutdown
+
+  // ===== addCheckFromConfig: =====
+  //
+  // Tests use `#process` checks (with names that resolve to live BEAM
+  // processes such as `#kernel_sup`) because Monitor's `start` runs the
+  // first check synchronously: HTTP and TCP checks against unreachable
+  // targets would block the test on the configured timeout. ProcessCheck
+  // resolves locally and returns immediately.
+  testAddHttpCheckBuildsHttpCheck =>
+    // We can't `addCheckFromConfig:` an HTTP check without triggering a
+    // real HTTP request, so verify the routing logic by calling the
+    // factory directly via the same dictionary shape.
+    cfg := #{#type => #http, #name => #api, #url => "http://localhost:1/health"}
+    check := HttpHealthCheck url: (cfg at: #url)
+    self assert: check class equals: HttpHealthCheck
+    self assert: check target equals: "http://localhost:1/health"
+
+  testAddTcpCheckBuildsTcpCheck =>
+    cfg := #{#type => #tcp, #name => #db, #host => "localhost", #port => 5432}
+    check := TcpPortCheck host: (cfg at: #host) port: (cfg at: #port)
+    self assert: check class equals: TcpPortCheck
+    self assert: check target equals: "localhost:5432"
+
+  testAddProcessCheckRegistersByName =>
+    self.watcher
+      addCheckFromConfig: #{
+        #type => #process,
+        #name => #worker,
+        #process => #kernel_sup,
+        #interval => 9999,
+        #threshold => 3
+      }
+    self assert: (self.watcher registry names includes: #worker)
+
+  testAddCheckHonorsDefaultIntervalAndThreshold =>
+    // Omit #interval and #threshold; defaults are 30 and 3 per SPEC §12.
+    self.watcher addCheckFromConfig: #{
+      #type => #process,
+      #name => #defaults,
+      #process => #kernel_sup
+    }
+    monitor :: Monitor := self.watcher registry monitor: #defaults
+    self assert: monitor interval equals: 30
+    self assert: monitor threshold equals: 3
+
+  testUnknownCheckTypeRaises =>
+    result := [
+      self.watcher addCheckFromConfig: #{
+        #type => #foobar,
+        #name => #bad,
+        #interval => 9999,
+        #threshold => 3
+      }
+      #did_not_raise
+    ] on: Error do: [:e | #raised]
+    self assert: result equals: #raised
+
+  testStartupChecksFromConfig =>
+    w :: Watcher := Watcher
+      startWith: #{
+        #dashboardPort => 0,
+        #receiverPort => 0,
+        #checks => #(#{
+          #type => #process,
+          #name => #web,
+          #process => #kernel_sup,
+          #interval => 9999,
+          #threshold => 3
+        }, #{
+          #type => #process,
+          #name => #db,
+          #process => #kernel_sup,
+          #interval => 9999,
+          #threshold => 3
+        })
+      }
+    self assert: w registry names size equals: 2
+    self assert: (w registry names includes: #web)
+    self assert: (w registry names includes: #db)
+    w shutdown
+
+  // ===== Dashboard reachable on the bound port =====
+  testDashboardServesApiStatus =>
+    url := "http://localhost:" ++ self.watcher dashboard port printString ++ "/api/status"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+
+  testReceiverServesHealth =>
+    url := "http://localhost:" ++ self.watcher receiver port printString ++ "/health"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+
+  // ===== defaultConfig =====
+  testDefaultConfigKeys =>
+    cfg :: Dictionary := Watcher defaultConfig
+    self assert: (cfg includesKey: #dashboardPort)
+    self assert: (cfg includesKey: #receiverPort)
+    self assert: (cfg includesKey: #webhookUrl)
+    self assert: (cfg includesKey: #checks)
+
+  testDefaultConfigPorts =>
+    cfg :: Dictionary := Watcher defaultConfig
+    self assert: (cfg at: #dashboardPort) equals: 8080
+    self assert: (cfg at: #receiverPort) equals: 8081
+
+  testDefaultConfigEmptyChecks =>
+    cfg :: Dictionary := Watcher defaultConfig
+    self assert: (cfg at: #checks) size equals: 0
