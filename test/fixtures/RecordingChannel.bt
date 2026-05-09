@@ -9,9 +9,9 @@ typed Actor subclass: RecordingChannel
   state: events :: List = #()
 
   /// Record an incoming event.
-  deliver: event :: MonitorEvent -> List =>
+  deliver: event :: MonitorEvent -> RecordingChannel =>
     self.events := self.events add: event
-    self.events
+    self
 
   /// All events recorded so far (oldest first).
   received -> List => self.events
