@@ -1,0 +1,306 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Dashboard — Actor serving a web UI and JSON API for monitoring status
+/// and alert history.
+///
+/// Routes:
+///   * `GET /`                  — Overview of all monitors with status
+///   * `GET /monitors`          — Detailed monitor list
+///   * `GET /alerts`            — Alert log, newest first
+///   * `GET /api/status`        — JSON status of all monitors
+///   * `GET /api/alerts`        — JSON alert list
+///   * `GET /api/monitors/:name` — JSON detail for a single monitor
+///   * `GET /static/*path`      — Static file serving (CSS, JS)
+///
+/// See SPEC.md section 11.
+typed Actor subclass: Dashboard
+  state: server :: HTTPServer | nil = nil
+  state: registry :: CheckRegistry
+  state: alertLog :: AlertLog
+  state: port :: Integer = 0
+
+  /// Spawn a Dashboard on `aPort`, wired to the given registry and alert log.
+  /// Use port 0 for ephemeral OS-assigned port (for tests).
+  class start: aPort :: Integer registry: reg :: CheckRegistry alertLog: log :: AlertLog -> Dashboard =>
+    dash := self spawnWith: #{
+      #port => aPort,
+      #registry => reg,
+      #alertLog => log
+    }
+    router := HTTPRouter
+      build: [:r |
+        // Pages
+        @expect type
+        r get: "/" handler: [:req | dash renderIndex: req]
+        @expect type
+        r get: "/monitors" handler: [:req | dash renderMonitors: req]
+        @expect type
+        r get: "/alerts" handler: [:req | dash renderAlerts: req]
+
+        // API (JSON)
+        @expect type
+        r get: "/api/status" handler: [:req | dash apiStatus: req]
+        @expect type
+        r get: "/api/alerts" handler: [:req | dash apiAlerts: req]
+        @expect type
+        r get: "/api/monitors/:name" handler: [:req | dash apiMonitor: req]
+
+        // Static assets
+        @expect type
+        r get: "/static/*path" handler: [:req | dash serveStatic: req]
+      ]
+    dash startServer: router
+    dash
+
+  // ===== HTML page handlers =====
+
+  /// GET / — Overview page showing all monitors with current status.
+  renderIndex: _req :: HTTPRequest -> HTTPResponse =>
+    statuses :: List(Dictionary) := self.registry status
+    rows := statuses
+      collect: [:s |
+        status := s at: #status
+        color := status == #ok ifTrue: [
+          "green"
+        ] ifFalse: [status == #fail ifTrue: ["red"] ifFalse: ["grey"]]
+        "<tr class="""
+          ++ color
+          ++ """>"
+          ++ "<td>"
+          ++ (s at: #name) displayString
+          ++ "</td>"
+          ++ "<td>"
+          ++ status displayString
+          ++ "</td>"
+          ++ "</tr>"
+      ]
+    body := self
+      layout: "Watcher"
+      content: ("<h1>Beamtalk Watcher</h1>"
+        ++ "<table><thead><tr><th>Monitor</th><th>Status</th></tr></thead><tbody>"
+        ++ (rows join: "")
+        ++ "</tbody></table>")
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "text/html; charset=utf-8")),
+        #body => body
+      }
+
+  /// GET /monitors — Detailed monitor listing page.
+  renderMonitors: _req :: HTTPRequest -> HTTPResponse =>
+    statuses :: List(Dictionary) := self.registry status
+    rows := statuses
+      collect: [:s |
+        status := s at: #status
+        color := status == #ok ifTrue: [
+          "green"
+        ] ifFalse: [status == #fail ifTrue: ["red"] ifFalse: ["grey"]]
+        lastResult := s at: #lastResult
+        details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+        "<tr class="""
+          ++ color
+          ++ """>"
+          ++ "<td>"
+          ++ (s at: #name) displayString
+          ++ "</td>"
+          ++ "<td>"
+          ++ status displayString
+          ++ "</td>"
+          ++ "<td>"
+          ++ details
+          ++ "</td>"
+          ++ "</tr>"
+      ]
+    body := self
+      layout: "Monitors"
+      content: ("<h1>Monitors</h1>"
+        ++ "<table><thead><tr><th>Name</th><th>Status</th><th>Details</th></tr></thead><tbody>"
+        ++ (rows join: "")
+        ++ "</tbody></table>")
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "text/html; charset=utf-8")),
+        #body => body
+      }
+
+  /// GET /alerts — Alert log page, newest first.
+  renderAlerts: _req :: HTTPRequest -> HTTPResponse =>
+    alerts :: List(Alert) := self.alertLog recent: 100
+    rows := alerts
+      collect: [:a |
+        "<div class=""alert-item"">"
+          ++ "<span class=""timestamp"">"
+          ++ (a timestamp isNil ifTrue: [""] ifFalse: [a timestamp printString])
+          ++ "</span>"
+          ++ "<strong>"
+          ++ a checkName
+          ++ "</strong> "
+          ++ a status
+          ++ " — "
+          ++ a details
+          ++ "</div>"
+      ]
+    body := self layout: "Alerts" content: ("<h1>Alert Log</h1>" ++ (rows join: ""))
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "text/html; charset=utf-8")),
+        #body => body
+      }
+
+  // ===== JSON API handlers =====
+
+  /// GET /api/status — JSON status of all monitors.
+  apiStatus: _req :: HTTPRequest -> HTTPResponse =>
+    statuses :: List(Dictionary) := self.registry status
+    entries := statuses
+      collect: [:s |
+        lastResult := s at: #lastResult
+        details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+        #{
+          "name" => (s at: #name) displayString,
+          "status" => (s at: #status) displayString,
+          "details" => details
+        }
+      ]
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: entries
+      }
+
+  /// GET /api/alerts — JSON alert list.
+  apiAlerts: _req :: HTTPRequest -> HTTPResponse =>
+    alerts :: List(Alert) := self.alertLog recent: 100
+    entries := alerts
+      collect: [:a |
+        #{
+          "checkName" => a checkName,
+          "type" => a type,
+          "status" => a status,
+          "details" => a details,
+          "target" => a target,
+          "timestamp" => (a timestamp isNil ifTrue: [
+            nil
+          ] ifFalse: [a timestamp printString])
+        }
+      ]
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: entries
+      }
+
+  /// GET /api/monitors/:name — JSON detail for a single monitor.
+  apiMonitor: req :: HTTPRequest -> HTTPResponse =>
+    name :: String := req param: "name"
+    nameSymbol := name asAtom
+    (self.registry names includes: nameSymbol)
+      ifFalse: [
+        ^HTTPResponse
+          new: #{
+            #status => 404,
+            #headers => #(#("content-type", "application/json")),
+            #body => "\{""error"":""monitor not found""}"
+          }
+      ]
+    monitor :: Monitor := self.registry monitor: nameSymbol
+    status := monitor status
+    lastResult := monitor lastResult
+    details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+    data := #{
+      "name" => name,
+      "status" => status displayString,
+      "details" => details
+    }
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: data
+      }
+
+  // ===== Static file serving =====
+
+  /// GET /static/*path — Serve static files from the static/ directory.
+  /// Rejects paths containing ".." to prevent directory traversal.
+  serveStatic: req :: HTTPRequest -> HTTPResponse =>
+    filePath :: String := req param: "path"
+    // Guard against directory traversal
+    (filePath includesSubstring: "..")
+      ifTrue: [
+        ^HTTPResponse
+          new: #{
+            #status => 403,
+            #headers => #(#("content-type", "text/plain")),
+            #body => "Forbidden"
+          }
+      ]
+    fullPath := "static/" ++ filePath
+    contentType := self contentTypeFor: filePath
+    fileResult := File readAll: fullPath
+    fileResult isOk
+      ifTrue: [
+        HTTPResponse
+          new: #{
+            #status => 200,
+            #headers => #(#("content-type", contentType)),
+            #body => fileResult unwrap
+          }
+      ]
+      ifFalse: [
+        HTTPResponse
+          new: #{
+            #status => 404,
+            #headers => #(#("content-type", "text/plain")),
+            #body => "Not Found"
+          }
+      ]
+
+  // ===== Helpers =====
+
+  /// Wrap `content` in the standard HTML layout with `title` and stylesheet.
+  layout: title :: String content: content :: String -> String =>
+    "<!DOCTYPE html><html><head>"
+      ++ "<meta charset=""utf-8"">"
+      ++ "<title>"
+      ++ title
+      ++ "</title>"
+      ++ "<link rel=""stylesheet"" href=""/static/style.css"">"
+      ++ "</head><body>"
+      ++ content
+      ++ "<script src=""/static/app.js""></script>"
+      ++ "</body></html>"
+
+  /// Determine content-type from a file extension.
+  contentTypeFor: path :: String -> String =>
+    (path endsWith: ".css") ifTrue: [^"text/css"]
+    (path endsWith: ".js") ifTrue: [^"application/javascript"]
+    (path endsWith: ".html") ifTrue: [^"text/html"]
+    (path endsWith: ".png") ifTrue: [^"image/png"]
+    (path endsWith: ".svg") ifTrue: [^"image/svg+xml"]
+    (path endsWith: ".ico") ifTrue: [^"image/x-icon"]
+    "application/octet-stream"
+
+  // ===== Server lifecycle =====
+
+  /// Start the underlying HTTP server with the supplied router and resolve
+  /// the port.
+  startServer: router :: HTTPRouter -> Dashboard =>
+    self.server := HTTPServer start: self.port handler: router
+    self.port := self.server port
+    self
+
+  /// The TCP port the server is listening on.
+  port -> Integer => self.port
+
+  /// Stop the underlying HTTP server.
+  shutdown -> Dashboard =>
+    self.server isNil ifFalse: [self.server stop]
+    self.server := nil
+    self
