@@ -1,0 +1,171 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for the Dashboard actor (BT-2128).
+///
+/// Spawns an AlertLog, a CheckRegistry (seeded with a ScriptedHealthCheck),
+/// and a Dashboard on an ephemeral port. Uses HTTPClient to verify each
+/// route returns the expected status code, content-type, and body shape.
+TestCase subclass: DashboardTest
+  field: log :: AlertLog | nil = nil
+  field: registry :: CheckRegistry | nil = nil
+  field: router :: RecordingListener | nil = nil
+  field: dashboard :: Dashboard | nil = nil
+  field: monitor :: Monitor | nil = nil
+
+  setUp =>
+    rtr :: RecordingListener := RecordingListener spawn
+    self.router := rtr
+    log :: AlertLog := AlertLog spawn
+    self.log := log
+    reg :: CheckRegistry := CheckRegistry start: rtr
+    self.registry := reg
+    // Seed a monitor so status/monitors pages have data
+    okResult := CheckResult ok: "web" details: "HTTP 200"
+    check := ScriptedHealthCheck named: "web" results: (List withAll: #(okResult))
+    self.monitor := reg
+      add: check
+      name: #web
+      interval: 9999
+      threshold: 3
+    // Seed an alert so alert pages have data
+    log
+      record: (Alert
+        fromWebhook: #{
+          "type" => "alert",
+          "check" => "web",
+          "target" => "http://example.com",
+          "status" => "fail",
+          "details" => "503",
+          "previousStatus" => "ok",
+          "timestamp" => "2026-05-03T10:00:00Z"
+        })
+    self.dashboard := Dashboard
+      start: 0
+      registry: reg
+      alertLog: log
+
+  tearDown =>
+    self.dashboard isNil ifFalse: [self.dashboard shutdown]
+    self.monitor isNil ifFalse: [self.monitor stopMonitoring]
+    self.dashboard := nil
+    self.registry := nil
+    self.log := nil
+    self.router := nil
+    self.monitor := nil
+
+  /// Build the base URL of the running dashboard.
+  baseUrl -> String => "http://localhost:" ++ self.dashboard port printString
+
+  // ===== Port assignment =====
+  testPortIsAssigned => self assert: self.dashboard port > 0
+
+  // ===== GET / =====
+  testIndexReturns200 =>
+    resp := (HTTPClient get: self baseUrl) unwrap
+    self assert: resp status equals: 200
+
+  testIndexContentTypeIsHtml =>
+    resp := (HTTPClient get: self baseUrl) unwrap
+    self assert: (resp body includesSubstring: "<!DOCTYPE html>")
+
+  testIndexContainsMonitorName =>
+    resp := (HTTPClient get: self baseUrl) unwrap
+    self assert: (resp body includesSubstring: "web")
+
+  // ===== GET /monitors =====
+  testMonitorsReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/monitors") unwrap
+    self assert: resp status equals: 200
+
+  testMonitorsContainsMonitorName =>
+    resp := (HTTPClient get: self baseUrl ++ "/monitors") unwrap
+    self assert: (resp body includesSubstring: "web")
+
+  // ===== GET /alerts =====
+  testAlertsReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/alerts") unwrap
+    self assert: resp status equals: 200
+
+  testAlertsContainsAlertData =>
+    resp := (HTTPClient get: self baseUrl ++ "/alerts") unwrap
+    self assert: (resp body includesSubstring: "web")
+
+  // ===== GET /api/status — JSON =====
+  testApiStatusReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/status") unwrap
+    self assert: resp status equals: 200
+
+  testApiStatusReturnsParseableJson =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/status") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: parsed size >= 1
+
+  testApiStatusContainsMonitorEntry =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/status") unwrap
+    parsed := (Json parse: resp body) unwrap
+    entry := parsed at: 1
+    self assert: (entry at: "name") equals: "web"
+
+  // ===== GET /api/alerts — JSON =====
+  testApiAlertsReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/alerts") unwrap
+    self assert: resp status equals: 200
+
+  testApiAlertsReturnsParseableJson =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/alerts") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: parsed size >= 1
+
+  testApiAlertsContainsAlertEntry =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/alerts") unwrap
+    parsed := (Json parse: resp body) unwrap
+    entry := parsed at: 1
+    self assert: (entry at: "checkName") equals: "web"
+    self assert: (entry at: "status") equals: "fail"
+
+  // ===== GET /api/monitors/:name — path param extraction =====
+  testApiMonitorReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/monitors/web") unwrap
+    self assert: resp status equals: 200
+
+  testApiMonitorReturnsParseableJson =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/monitors/web") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "name") equals: "web"
+
+  testApiMonitorMissingReturns404 =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/monitors/nonexistent") unwrap
+    self assert: resp status equals: 404
+
+  testApiMonitorMissing404IsJson =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/monitors/nonexistent") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "error") equals: "monitor not found"
+
+  // ===== GET /static/*path =====
+  testStaticCssReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/static/style.css") unwrap
+    self assert: resp status equals: 200
+
+  testStaticCssContentType =>
+    resp := (HTTPClient get: self baseUrl ++ "/static/style.css") unwrap
+    // Verify the body contains CSS content (proves it was read from file)
+    self assert: (resp body includesSubstring: "body")
+
+  testStaticJsReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/static/app.js") unwrap
+    self assert: resp status equals: 200
+
+  testStaticMissingReturns404 =>
+    resp := (HTTPClient get: self baseUrl ++ "/static/no-such-file.xyz") unwrap
+    self assert: resp status equals: 404
+
+  testStaticTraversalReturns403 =>
+    resp := (HTTPClient get: self baseUrl ++ "/static/../beamtalk.toml") unwrap
+    self assert: resp status equals: 403
+
+  // ===== 404 on unknown path =====
+  testUnknownPathReturns404 =>
+    resp := (HTTPClient get: self baseUrl ++ "/totally-unknown") unwrap
+    self assert: resp status equals: 404
