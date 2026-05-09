@@ -54,19 +54,13 @@ sealed typed Value subclass: HttpHealthCheck
   /// Run the HTTP request and return a CheckResult.
   check -> CheckResult =>
     options := #{#timeout => self.timeout}
-    result := HTTPClient
+    result :: Result(HTTPResponse, Error) := HTTPClient
       request: #get
       url: self.url
       options: options
-    result
-      ifOk: [:resp | self evaluateResponse: resp]
-      ifError: [:err |
-        // The Result error payload is opaque (HTTP backend may surface
-        // an atom like #timeout or a tuple) — type-erase here to keep
-        // the typed-class check happy, then format via printString.
-        @expect type
-        self errorResultFor: err
-      ]
+    result ifOk: [:resp |
+      self evaluateResponse: resp
+    ] ifError: [:err | self errorResultFor: err]
 
   /// Human-readable name — "HTTP <url>".
   name -> String => "HTTP " ++ self.url
@@ -77,7 +71,7 @@ sealed typed Value subclass: HttpHealthCheck
   // ===== Private helpers =====
 
   /// Build a `CheckResult fail` from an HTTP-layer error (timeout, refused, ...).
-  errorResultFor: err :: Object -> CheckResult =>
+  errorResultFor: err :: Error -> CheckResult =>
     CheckResult fail: self name details: "HTTP error: " ++ err printString
 
   /// Apply status and body matchers to a successful HTTP response.

@@ -40,18 +40,22 @@ sealed typed Value subclass: TcpPortCheck
 
   /// Open a TCP connection and return a CheckResult describing the outcome.
   check -> CheckResult =>
-    // gen_tcp:connect/4 returns a Result(Socket, atom()) — the FFI is untyped
-    // so the whole call surfaces as Dynamic. Type-erase via @expect so the
-    // typed-class check passes; ifOk:/ifError: dispatch is dynamic anyway.
-    result := (Erlang gen_tcp)
+    result :: Result(Object, Object) := self connectSocket
+    result ifOk: [:sock |
+      self okResultFor: sock
+    ] ifError: [:err | self errorResultFor: err]
+
+  // ===== Private FFI wrappers =====
+
+  /// gen_tcp:connect/4 — returns a Result(Socket, atom()). The FFI is
+  /// untyped so the call surfaces as Dynamic; the typed return on this
+  /// helper lets the caller see a typed `Result`.
+  connectSocket -> Result(Object, Object) =>
+    (Erlang gen_tcp)
       connect: self.host asAtom
       port: self.port
       opts: #()
       timeout: self.timeout
-    @expect type
-    result ifOk: [:sock |
-      self okResultFor: sock
-    ] ifError: [:err | self errorResultFor: err]
 
   /// Human-readable name — "TCP <host>:<port>".
   name -> String => "TCP " ++ self.host ++ ":" ++ self.port printString

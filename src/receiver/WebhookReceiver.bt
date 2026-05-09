@@ -28,6 +28,9 @@ typed Actor subclass: WebhookReceiver
     receiver := self spawnWith: #{#port => aPort, #alertLog => anAlertLog}
     router := HTTPRouter
       build: [:r |
+        // `r` is HTTPRouteBuilder but block parameter inferred Dynamic.
+        // `@expect type` per statement is the documented workaround
+        // (see memory: typed_block_params).
         @expect type
         r post: "/webhook" handler: [:req | receiver handleWebhook: req]
         @expect type

@@ -22,10 +22,10 @@ typed Actor subclass: NotificationRouter
     self.channels := self.channels add: channel
     self
 
-  /// Unregister a channel actor. Identity comparison via `=:=`.
+  /// Unregister a channel actor. Identity comparison via `==` (Actor ==
+  /// is pid identity, see ProtoobjectActorsTest::testActorIdentityTests).
   removeChannel: channel :: Actor -> NotificationRouter =>
-    @expect type
-    self.channels := self.channels reject: [:c | c =:= channel]
+    self.channels := self.channels reject: [:c | c == channel]
     self
 
   /// Receive a MonitorEvent. Dedup against recent events; fan out to
