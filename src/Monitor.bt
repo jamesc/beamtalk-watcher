@@ -30,7 +30,10 @@
 ///
 /// See SPEC.md §3.
 typed Actor subclass: Monitor
-  state: check :: HealthCheck
+  // Nilable (rather than required) so a bare `MonitorSupervisor startChild`
+  // can spawn this with empty init state; `configure:interval:threshold:listener:`
+  // fills it in immediately afterward. See `CheckRegistry spawnMonitorFor:`.
+  state: check :: HealthCheck | nil = nil
   state: interval :: Integer = 30
   state: threshold :: Integer = 3
   state: currentStatus :: Symbol = #unknown
@@ -41,14 +44,44 @@ typed Actor subclass: Monitor
   state: history :: List(CheckResult) = #()
   state: timer :: Timer | nil = nil
 
+  // ===== Supervision =====
+
+  /// `MonitorSupervisor startChild` spawns with empty init state (BT stdlib
+  /// limitation — a `DynamicSupervisor`'s `startChild: args` cannot pass
+  /// per-call init args without an arity mismatch, so `CheckRegistry`
+  /// spawns bare and configures after). This does mean an OTP-level
+  /// restart would come back with `check == nil` and never run again, so
+  /// `CheckRegistry` — not OTP — is responsible for noticing a dead
+  /// Monitor (via `onExit:`) and respawning + reconfiguring a fresh one;
+  /// `supervisionPolicy` stays `#temporary` (the `Actor` default) so OTP
+  /// doesn't also try to restart the same child out from under it.
+  ///
+  /// Cancel the recurring timer on shutdown (crash, `kill`, or a graceful
+  /// `terminateChild:`/`stop`) so it doesn't leave the Timer process
+  /// firing into a dead actor forever.
+  terminate: _reason :: Object -> Nil =>
+    self.timer isNil ifFalse: [self.timer cancel]
+    nil
+
+  /// Fill in a bare (supervisor-spawned) Monitor's config. Call once,
+  /// before `start`. See `CheckRegistry spawnMonitorFor:`.
+  configure: aCheck :: HealthCheck interval: secs :: Integer threshold: n :: Integer listener: anActor :: EventListener | nil -> Monitor =>
+    self.check := aCheck
+    self.interval := secs
+    self.threshold := n
+    self.listener := anActor
+    self
+
   // ===== Class-side factory =====
 
-  /// Spawn a new Monitor wired to `aCheck`, polling every `secs` seconds,
-  /// with threshold `n` consecutive results before emitting an event,
-  /// and notifying `anActor` on state changes.
+  /// Spawn a new, unsupervised Monitor wired to `aCheck`, polling every
+  /// `secs` seconds, with threshold `n` consecutive results before
+  /// emitting an event, and notifying `anActor` on state changes.
   ///
   /// The returned actor is spawned but not yet running checks — call
-  /// `start` to kick off the periodic timer.
+  /// `start` to kick off the periodic timer. Production code goes through
+  /// `CheckRegistry`/`MonitorSupervisor` instead so a crash gets noticed
+  /// and the check restarted; this factory is for direct/test use.
   class check: aCheck :: HealthCheck interval: secs :: Integer threshold: n :: Integer listener: anActor :: EventListener -> Monitor =>
     self spawnWith: #{
       #check => aCheck,
@@ -104,6 +137,9 @@ typed Actor subclass: Monitor
   /// Self-calls returning Nil are async casts whose state mutations
   /// would not be visible to the caller. See memory: actor_self_calls.
   runCheck -> Symbol =>
+    // `check` is only nil in the brief window between a bare supervised
+    // spawn and `configure:` — never by the time `start`/`runCheck` runs.
+    @expect type
     healthCheck :: HealthCheck := self.check
     result :: CheckResult := healthCheck check
     previousStatus :: Symbol := self.currentStatus
@@ -166,6 +202,7 @@ typed Actor subclass: Monitor
   status -> Symbol => self.currentStatus
 
   /// Name of the underlying check (delegates to the HealthCheck).
+  @expect type
   checkName -> String => self.check name
 
   /// Most recent CheckResult, or `nil` if `runCheck` has never run.

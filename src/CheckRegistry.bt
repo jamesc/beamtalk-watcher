@@ -10,44 +10,100 @@
 /// a Monitor, starts it, and stores it. Removing a check stops the monitor
 /// and removes the entry.
 ///
+/// ## Supervision
+///
+/// Monitors are started as children of a `MonitorSupervisor` rather than
+/// via a bare `spawnWith:`, so a crashed Monitor is cleanly torn down and
+/// removable via `terminateChild:` instead of leaking a dead-but-registered
+/// process. The registry — not OTP — is what actually notices a crash and
+/// respawns the check: `MonitorSupervisor startChild` can only spawn with
+/// empty init state (a `DynamicSupervisor`'s `startChild: args` can't pass
+/// per-call args without hitting an arity mismatch — BT-3365), so a plain
+/// OTP auto-restart would come back with `check == nil` and silently never
+/// check anything again. Instead `add:` remembers each check's config in
+/// `configs`, and `spawnMonitorFor:` re-arms `onExit:` on every spawned
+/// Monitor so a crash triggers `monitorExited:reason:`, which
+/// re-spawns and reconfigures a fresh Monitor under the same name.
+///
 /// The `status` method collects per-monitor snapshots as a List of
 /// Dictionaries, each with keys `#name`, `#status`, and `#lastResult`.
 ///
 /// See SPEC.md §10.
 typed Actor subclass: CheckRegistry
   state: monitors :: Dictionary(Symbol, Monitor) = #{}
+  state: configs :: Dictionary(Symbol, Dictionary) = #{}
   state: router :: EventListener | nil = nil
+  state: supervisor :: MonitorSupervisor | nil = nil
 
   // ===== Class-side factory =====
 
-  /// Spawn a new CheckRegistry wired to the given notification router.
-  /// The router is passed as the listener to each spawned Monitor.
+  /// Spawn a new CheckRegistry wired to the given notification router,
+  /// backed by a fresh `MonitorSupervisor` that every Monitor is started
+  /// under. The router is passed as the listener to each spawned Monitor.
   class start: aRouter :: EventListener -> CheckRegistry =>
-    self spawnWith: #{#router => aRouter}
+    sup :: MonitorSupervisor := (MonitorSupervisor supervise) unwrap
+    self spawnWith: #{#router => aRouter, #supervisor => sup}
 
   // ===== Monitor management =====
 
   /// Create a new Monitor for the given check, start it, and register it
   /// under `name`. Returns the spawned Monitor actor.
-  ///
-  /// The monitor is wired to this registry's router as its event listener,
-  /// so state-transition events flow to the notification system automatically.
   add: check :: HealthCheck name: name :: Symbol interval: secs :: Integer threshold: n :: Integer -> Monitor =>
-    monitor :: Monitor := Monitor
-      check: check
-      interval: secs
-      threshold: n
+    self.configs := self.configs at: name put: #{
+      #check => check,
+      #interval => secs,
+      #threshold => n
+    }
+    self spawnMonitorFor: name
+
+  /// Start (or restart) the Monitor for `name` from its remembered config:
+  /// spawns a bare child under `supervisor`, configures and starts it,
+  /// registers it under `name`, and arms `onExit:` so a future crash
+  /// triggers `monitorExited:reason:`.
+  internal spawnMonitorFor: name :: Symbol -> Monitor =>
+    cfg :: Dictionary := self.configs at: name
+    monitor :: Monitor := (self.supervisor startChild) unwrap
+    monitor
+      configure: (cfg at: #check)
+      interval: (cfg at: #interval)
+      threshold: (cfg at: #threshold)
       listener: self.router
     self.monitors := self.monitors at: name put: monitor
+    monitor onExit: [:reason | self monitorExited: name reason: reason!]
     monitor start
     monitor
+
+  /// Called (async, from the `onExit:` watcher process) when a Monitor's
+  /// process terminates. Re-spawns the check under the same name unless
+  /// `remove:` already dropped it (a graceful `terminateChild:` also fires
+  /// `onExit:`, so this check is what keeps removal from resurrecting it).
+  internal monitorExited: name :: Symbol reason: _reason :: Object -> CheckRegistry =>
+    (self.monitors includesKey: name) ifTrue: [self spawnMonitorFor: name]
+    self
 
   /// Stop and unregister the monitor identified by `name`.
   /// Raises if `name` is not in the registry.
   remove: name :: Symbol -> CheckRegistry =>
     monitor :: Monitor := self.monitors at: name
-    monitor stopMonitoring
     self.monitors := self.monitors removeKey: name
+    self.configs := self.configs removeKey: name
+    monitor stopMonitoring
+    (self.supervisor terminateChild: monitor) unwrap
+    self
+
+  /// Stop and terminate every Monitor this registry started. Does *not*
+  /// stop `supervisor` itself: `MonitorSupervisor` is an app-wide
+  /// singleton (`DynamicSupervisor class supervise` always returns the
+  /// same running instance), so stopping it here would take down every
+  /// other registry sharing it too — this only tears down children this
+  /// registry actually owns. Safe to call multiple times.
+  shutdown -> CheckRegistry =>
+    self.monitors do: [:monitor |
+      monitor stopMonitoring
+      (self.supervisor terminateChild: monitor) unwrap
+    ]
+    self.monitors := #{}
+    self.configs := #{}
     self
 
   // ===== Query interface =====

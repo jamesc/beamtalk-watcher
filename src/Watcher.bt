@@ -173,9 +173,5 @@ typed Actor subclass: Watcher
   shutdown -> Watcher =>
     self.dashboard isNil ifFalse: [self.dashboard shutdown]
     self.receiver isNil ifFalse: [self.receiver shutdown]
-    self.registry isNil ifFalse: [
-      self.registry names do: [:name |
-        (self.registry monitor: name) stopMonitoring
-      ]
-    ]
+    self.registry isNil ifFalse: [self.registry shutdown]
     self

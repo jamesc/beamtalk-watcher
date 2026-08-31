@@ -236,3 +236,76 @@ TestCase subclass: CheckRegistryTest
       threshold: 3
     self assert: (registry names includes: #alpha)
     monitor stopMonitoring
+
+  // ===== Crash recovery (MonitorSupervisor + onExit: self-healing) =====
+  //
+  // MonitorSupervisor children are started with empty init state and
+  // configured afterward (BT-3365 — a DynamicSupervisor's `startChild:
+  // args` cannot pass per-call init args), so plain OTP auto-restart would
+  // come back with `check == nil` and never check anything again.
+  // CheckRegistry compensates with its own onExit:-triggered respawn that
+  // replays the original check/interval/threshold — these tests pin down
+  // that behavior directly, since it is the entire point of supervising
+  // Monitors at all.
+  testCrashedMonitorIsRespawnedUnderSameName =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    original :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    original kill
+    (Erlang timer) sleep: 300
+    self assert: (registry names includes: #web)
+    respawned :: Monitor := registry monitor: #web
+    self deny: respawned == original
+    self assert: respawned isAlive
+
+  testRespawnedMonitorPreservesConfig =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    original :: Monitor := registry
+      add: check
+      name: #web
+      interval: 45
+      threshold: 7
+    original kill
+    (Erlang timer) sleep: 300
+    respawned :: Monitor := registry monitor: #web
+    self assert: respawned interval equals: 45
+    self assert: respawned threshold equals: 7
+
+  testRespawnedMonitorResumesChecking =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "web"
+    original :: Monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    original kill
+    (Erlang timer) sleep: 300
+    respawned :: Monitor := registry monitor: #web
+    // `start` on the respawned Monitor already ran an immediate `runCheck`;
+    // confirm it actually recorded a result rather than sitting inert.
+    self deny: respawned lastResult == nil
+
+  testRemovedMonitorIsNotResurrectedAfterTermination =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check :: ScriptedHealthCheck := self okCheck: "temp"
+    registry
+      add: check
+      name: #temp
+      interval: 60
+      threshold: 3
+    registry remove: #temp
+    // `terminateChild:` inside `remove:` also fires `onExit:` on the
+    // now-dead Monitor — this pins down that `remove:` isn't undone by
+    // the registry's own crash-recovery path racing back in afterward.
+    (Erlang timer) sleep: 300
+    self deny: (registry names includes: #temp)

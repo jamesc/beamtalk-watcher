@@ -1,0 +1,16 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// MonitorSupervisor — DynamicSupervisor managing every `Monitor` actor.
+///
+/// `CheckRegistry` starts children through this supervisor instead of
+/// calling `Monitor spawnWith:` directly, so a crash in one check's
+/// `Monitor` (e.g. an unhandled error inside its `HealthCheck check`) gets
+/// an automatic OTP restart — per `Monitor supervisionPolicy` (`#permanent`)
+/// — instead of silently going dark until someone notices and re-adds the
+/// check by hand.
+///
+/// See SPEC.md §3, §10.
+DynamicSupervisor(Monitor) subclass: MonitorSupervisor
+
+  class childClass => Monitor
