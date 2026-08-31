@@ -20,8 +20,8 @@ TestCase subclass: ProcessCheckTest
         // Resolve, then exit the process so the registration is released.
         pid := (Erlang erlang) whereis: self.registeredName
         pid == #undefined ifFalse: [(Erlang erlang) exit: pid arg: #kill]
-        self.registeredName := nil
       ]
+    self.registeredName := nil
 
   // ----- helpers -----
 

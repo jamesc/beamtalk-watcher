@@ -12,11 +12,8 @@ TestCase subclass: HttpHealthCheckTest
   field: srv = nil
 
   tearDown =>
-    self.srv isNil
-      ifFalse: [
-        self.srv stop
-        self.srv := nil
-      ]
+    self.srv isNil ifFalse: [self.srv stop]
+    self.srv := nil
 
   // ----- helpers -----
 

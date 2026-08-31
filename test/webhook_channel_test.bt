@@ -19,11 +19,8 @@ TestCase subclass: WebhookChannelTest
     self.counter := ctr
 
   tearDown =>
-    self.srv isNil
-      ifFalse: [
-        self.srv stop
-        self.srv := nil
-      ]
+    self.srv isNil ifFalse: [self.srv stop]
+    self.srv := nil
 
   // ----- helpers -----
 
@@ -79,8 +76,10 @@ TestCase subclass: WebhookChannelTest
       #retryDelay => 50
     }
     channel deliver: self sampleEvent
-    // Delays: 50ms + 100ms + complete = ~200ms total
-    (Erlang timer) sleep: 500
+    // Delays: 50ms + 100ms + complete = ~200ms total; generous margin
+    // (like testRetryOnConnectionRefused) so this doesn't flake under
+    // full-suite scheduler contention.
+    (Erlang timer) sleep: 2000
     // 1 warmup + 3 retries = 4
     self assert: self.counter count equals: 4
     self assert: channel pending equals: 0
@@ -166,7 +165,7 @@ TestCase subclass: WebhookChannelTest
       #retryDelay => 50
     }
     channel deliver: self sampleEvent
-    (Erlang timer) sleep: 500
+    (Erlang timer) sleep: 1000
     // 1 warmup + 1 fail + 1 success = 3
     self assert: self.counter count equals: 3
     self assert: channel pending equals: 0

@@ -12,11 +12,8 @@ TestCase subclass: TcpPortCheckTest
   field: listenSock = nil
 
   tearDown =>
-    self.listenSock isNil
-      ifFalse: [
-        (Erlang gen_tcp) close: self.listenSock
-        self.listenSock := nil
-      ]
+    self.listenSock isNil ifFalse: [(Erlang gen_tcp) close: self.listenSock]
+    self.listenSock := nil
 
   // ----- helpers -----
 
