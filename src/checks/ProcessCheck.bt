@@ -59,15 +59,12 @@ sealed typed Value subclass: ProcessCheck
 
   // ===== Private FFI wrappers =====
 
-  /// erlang:whereis/1 — returns a Pid or the atom #undefined. The FFI is
-  /// untyped so the call surfaces as Dynamic; `@expect type` is confined
-  /// here so callers see a typed return.
+  /// erlang:whereis/1 — returns a Pid or the atom #undefined.
   whereisPid: atomName :: Symbol -> Object =>
-    @expect type
     (Erlang erlang) whereis: atomName
 
   /// erlang:is_process_alive/1 — typed as Boolean. `@expect type` confined
-  /// here for the same reason as `whereisPid:`.
+  /// here since the FFI call itself surfaces as Dynamic.
   isAlive: pid :: Object -> Boolean =>
     @expect type
     (Erlang erlang) is_process_alive: pid

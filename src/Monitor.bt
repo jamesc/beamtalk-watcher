@@ -139,7 +139,6 @@ typed Actor subclass: Monitor
   runCheck -> Symbol =>
     // `check` is only nil in the brief window between a bare supervised
     // spawn and `configure:` — never by the time `start`/`runCheck` runs.
-    @expect type
     healthCheck :: HealthCheck := self.check
     result :: CheckResult := healthCheck check
     previousStatus :: Symbol := self.currentStatus
@@ -202,7 +201,6 @@ typed Actor subclass: Monitor
   status -> Symbol => self.currentStatus
 
   /// Name of the underlying check (delegates to the HealthCheck).
-  @expect type
   checkName -> String => self.check name
 
   /// Most recent CheckResult, or `nil` if `runCheck` has never run.

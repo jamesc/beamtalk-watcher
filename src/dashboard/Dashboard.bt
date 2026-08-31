@@ -30,28 +30,17 @@ typed Actor subclass: Dashboard
     }
     router := HTTPRouter
       build: [:r |
-        // The block parameter is Dynamic; per-statement `@expect type`
-        // is the documented workaround (see memory: typed_block_params).
-        // The inner `[:req | ...]` block parameter is also Dynamic — both
-        // warnings on each statement are suppressed by a single pragma.
         // Pages
-        @expect type
         r get: "/" handler: [:req | dash renderIndex: req]
-        @expect type
         r get: "/monitors" handler: [:req | dash renderMonitors: req]
-        @expect type
         r get: "/alerts" handler: [:req | dash renderAlerts: req]
 
         // API (JSON)
-        @expect type
         r get: "/api/status" handler: [:req | dash apiStatus: req]
-        @expect type
         r get: "/api/alerts" handler: [:req | dash apiAlerts: req]
-        @expect type
         r get: "/api/monitors/:name" handler: [:req | dash apiMonitor: req]
 
         // Static assets
-        @expect type
         r get: "/static/*path" handler: [:req | dash serveStatic: req]
       ]
     dash startServer: router

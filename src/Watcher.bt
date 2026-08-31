@@ -117,12 +117,9 @@ typed Actor subclass: Watcher
   /// observes the registration before returning.
   addCheckFromConfig: checkConfig :: Dictionary -> Watcher =>
     type :: Symbol := checkConfig at: #type
-    // Each branch returns a concrete sealed Value class; `@expect type`
-    // suppresses the structural-protocol mismatch on the union assignment.
     // Unknown `#type` raises rather than silently falling through to a
     // ProcessCheck (which would itself fail on the missing `#process` key
     // with a confusing `KeyNotFound` error far from the misconfiguration).
-    @expect type
     check :: HealthCheck := type == #http
       ifTrue: [HttpHealthCheck url: (checkConfig at: #url)]
       ifFalse: [
