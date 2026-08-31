@@ -44,6 +44,24 @@ typed Actor subclass: Monitor
   state: history :: List(CheckResult) = #()
   state: timer :: Timer | nil = nil
 
+  // ===== Class-side factory =====
+
+  /// Spawn a new, unsupervised Monitor wired to `aCheck`, polling every
+  /// `secs` seconds, with threshold `n` consecutive results before
+  /// emitting an event, and notifying `anActor` on state changes.
+  ///
+  /// The returned actor is spawned but not yet running checks — call
+  /// `start` to kick off the periodic timer. Production code goes through
+  /// `CheckRegistry`/`MonitorSupervisor` instead so a crash gets noticed
+  /// and the check restarted; this factory is for direct/test use.
+  class check: aCheck :: HealthCheck interval: secs :: Integer threshold: n :: Integer listener: anActor :: EventListener -> Monitor =>
+    self spawnWith: #{
+      #check => aCheck,
+      #interval => secs,
+      #threshold => n,
+      #listener => anActor
+    }
+
   // ===== Supervision =====
 
   /// `MonitorSupervisor startChild` spawns with empty init state (BT stdlib
@@ -71,24 +89,6 @@ typed Actor subclass: Monitor
     self.threshold := n
     self.listener := anActor
     self
-
-  // ===== Class-side factory =====
-
-  /// Spawn a new, unsupervised Monitor wired to `aCheck`, polling every
-  /// `secs` seconds, with threshold `n` consecutive results before
-  /// emitting an event, and notifying `anActor` on state changes.
-  ///
-  /// The returned actor is spawned but not yet running checks — call
-  /// `start` to kick off the periodic timer. Production code goes through
-  /// `CheckRegistry`/`MonitorSupervisor` instead so a crash gets noticed
-  /// and the check restarted; this factory is for direct/test use.
-  class check: aCheck :: HealthCheck interval: secs :: Integer threshold: n :: Integer listener: anActor :: EventListener -> Monitor =>
-    self spawnWith: #{
-      #check => aCheck,
-      #interval => secs,
-      #threshold => n,
-      #listener => anActor
-    }
 
   // ===== Lifecycle =====
 
@@ -141,7 +141,7 @@ typed Actor subclass: Monitor
     // spawn and `configure:` — never by the time `start`/`runCheck` runs.
     healthCheck :: HealthCheck := self.check
     result :: CheckResult := healthCheck check
-    previousStatus :: Symbol := self.currentStatus
+    previousStatus := self.currentStatus
     self.lastResult := result
     self.history := self trimHistory: (self.history add: result)
     result isOk
@@ -175,7 +175,7 @@ typed Actor subclass: Monitor
   /// Send a `MonitorEvent` to the listener actor. The cast (`!`) makes
   /// this fire-and-forget so a slow listener never stalls the monitor.
   notify: type :: Symbol from: previousStatus :: Symbol -> Monitor =>
-    event :: MonitorEvent := MonitorEvent
+    event := MonitorEvent
       type: type
       monitor: self
       check: self.check

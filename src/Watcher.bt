@@ -58,7 +58,7 @@ typed Actor subclass: Watcher
   /// and dashboard, then registers each entry of `#checks` via
   /// `addCheckFromConfig:`.
   class startWith: aConfig :: Dictionary -> Watcher =>
-    watcher :: Watcher := self spawnWith: #{#config => aConfig}
+    watcher := self spawnWith: #{#config => aConfig}
     watcher bringUp: aConfig
 
   /// Default configuration. Override via `startWith:`.
@@ -76,9 +76,9 @@ typed Actor subclass: Watcher
   /// once by `startWith:` after the Watcher itself has been spawned.
   /// Returns self so the caller can hold a reference to the live Watcher.
   bringUp: aConfig :: Dictionary -> Watcher =>
-    log :: AlertLog := AlertLog spawn
-    rtr :: NotificationRouter := NotificationRouter spawn
-    reg :: CheckRegistry := CheckRegistry start: rtr
+    log := AlertLog spawn
+    rtr := NotificationRouter spawn
+    reg := CheckRegistry start: rtr
     self.alertLog := log
     self.router := rtr
     self.registry := reg
@@ -86,7 +86,7 @@ typed Actor subclass: Watcher
     webhookUrl := aConfig at: #webhookUrl ifAbsent: [nil]
     webhookUrl isNil
       ifFalse: [
-        channel :: WebhookChannel := WebhookChannel url: webhookUrl
+        channel := WebhookChannel url: webhookUrl
         rtr addChannel: channel
       ]
 

@@ -12,7 +12,7 @@ TestCase subclass: WebhookReceiverTest
   field: receiver :: WebhookReceiver | nil = nil
 
   setUp =>
-    log :: AlertLog := AlertLog spawn
+    log := AlertLog spawn
     self.log := log
     self.receiver := WebhookReceiver start: 0 alertLog: log
 
@@ -56,8 +56,8 @@ TestCase subclass: WebhookReceiverTest
     url := self baseUrl ++ "/webhook"
     (HTTPClient post: url body: self samplePayload) unwrap
     self assert: self.log count equals: 1
-    recent :: List(Alert) := self.log recent: 1
-    alert :: Alert := recent at: 1
+    recent := self.log recent: 1
+    alert := recent at: 1
     self assert: alert checkName equals: "api"
     self assert: alert type equals: "alert"
     self assert: alert status equals: "fail"

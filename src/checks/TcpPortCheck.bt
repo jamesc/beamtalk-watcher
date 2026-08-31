@@ -40,7 +40,7 @@ sealed typed Value subclass: TcpPortCheck
 
   /// Open a TCP connection and return a CheckResult describing the outcome.
   check -> CheckResult =>
-    result :: Result(Object, Object) := self connectSocket
+    result := self connectSocket
     result ifOk: [:sock |
       self okResultFor: sock
     ] ifError: [:err | self errorResultFor: err]

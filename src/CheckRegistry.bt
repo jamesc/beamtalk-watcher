@@ -41,7 +41,7 @@ typed Actor subclass: CheckRegistry
   /// backed by a fresh `MonitorSupervisor` that every Monitor is started
   /// under. The router is passed as the listener to each spawned Monitor.
   class start: aRouter :: EventListener -> CheckRegistry =>
-    sup :: MonitorSupervisor := (MonitorSupervisor supervise) unwrap
+    sup := (MonitorSupervisor supervise) unwrap
     self spawnWith: #{#router => aRouter, #supervisor => sup}
 
   // ===== Monitor management =====
@@ -61,8 +61,8 @@ typed Actor subclass: CheckRegistry
   /// registers it under `name`, and arms `onExit:` so a future crash
   /// triggers `monitorExited:reason:`.
   internal spawnMonitorFor: name :: Symbol -> Monitor =>
-    cfg :: Dictionary := self.configs at: name
-    monitor :: Monitor := (self.supervisor startChild) unwrap
+    cfg := self.configs at: name
+    monitor := (self.supervisor startChild) unwrap
     monitor
       configure: (cfg at: #check)
       interval: (cfg at: #interval)
@@ -84,7 +84,7 @@ typed Actor subclass: CheckRegistry
   /// Stop and unregister the monitor identified by `name`.
   /// Raises if `name` is not in the registry.
   remove: name :: Symbol -> CheckRegistry =>
-    monitor :: Monitor := self.monitors at: name
+    monitor := self.monitors at: name
     self.monitors := self.monitors removeKey: name
     self.configs := self.configs removeKey: name
     monitor stopMonitoring
@@ -98,10 +98,11 @@ typed Actor subclass: CheckRegistry
   /// other registry sharing it too — this only tears down children this
   /// registry actually owns. Safe to call multiple times.
   shutdown -> CheckRegistry =>
-    self.monitors do: [:monitor |
-      monitor stopMonitoring
-      (self.supervisor terminateChild: monitor) unwrap
-    ]
+    self.monitors
+      do: [:monitor |
+        monitor stopMonitoring
+        (self.supervisor terminateChild: monitor) unwrap
+      ]
     self.monitors := #{}
     self.configs := #{}
     self
@@ -116,7 +117,7 @@ typed Actor subclass: CheckRegistry
   status -> List(Dictionary) =>
     self.monitors keys
       collect: [:name |
-        monitor :: Monitor := self.monitors at: name
+        monitor := self.monitors at: name
         #{
           #name => name,
           #status => monitor status,

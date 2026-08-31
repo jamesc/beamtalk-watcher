@@ -40,7 +40,7 @@ sealed typed Value subclass: ProcessCheck
     self.processName isNil ifTrue: [
       ^CheckResult fail: self name details: "Process name not set"
     ]
-    atomName :: Symbol := (self.processName isKindOf: String) ifTrue: [
+    atomName := (self.processName isKindOf: String) ifTrue: [
       self.processName asAtom
     ] ifFalse: [self.processName]
     pid := self whereisPid: atomName
@@ -67,5 +67,4 @@ sealed typed Value subclass: ProcessCheck
     (Erlang erlang) whereis: atomName
 
   /// erlang:is_process_alive/1 — typed as Boolean.
-  isAlive: pid :: Pid -> Boolean =>
-    (Erlang erlang) is_process_alive: pid
+  isAlive: pid :: Pid -> Boolean => (Erlang erlang) is_process_alive: pid

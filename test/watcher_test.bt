@@ -54,7 +54,7 @@ TestCase subclass: WatcherTest
     self assert: self.watcher router channels size equals: 0
 
   testWebhookChannelAddedWhenUrlPresent =>
-    w :: Watcher := Watcher
+    w := Watcher
       startWith: #{
         #dashboardPort => 0,
         #receiverPort => 0,
@@ -104,7 +104,7 @@ TestCase subclass: WatcherTest
       #name => #defaults,
       #process => #kernel_sup
     }
-    monitor :: Monitor := self.watcher registry monitor: #defaults
+    monitor := self.watcher registry monitor: #defaults
     self assert: monitor interval equals: 30
     self assert: monitor threshold equals: 3
 
@@ -121,7 +121,7 @@ TestCase subclass: WatcherTest
     self assert: result equals: #raised
 
   testStartupChecksFromConfig =>
-    w :: Watcher := Watcher
+    w := Watcher
       startWith: #{
         #dashboardPort => 0,
         #receiverPort => 0,
@@ -157,17 +157,17 @@ TestCase subclass: WatcherTest
 
   // ===== defaultConfig =====
   testDefaultConfigKeys =>
-    cfg :: Dictionary := Watcher defaultConfig
+    cfg := Watcher defaultConfig
     self assert: (cfg includesKey: #dashboardPort)
     self assert: (cfg includesKey: #receiverPort)
     self assert: (cfg includesKey: #webhookUrl)
     self assert: (cfg includesKey: #checks)
 
   testDefaultConfigPorts =>
-    cfg :: Dictionary := Watcher defaultConfig
+    cfg := Watcher defaultConfig
     self assert: (cfg at: #dashboardPort) equals: 8080
     self assert: (cfg at: #receiverPort) equals: 8081
 
   testDefaultConfigEmptyChecks =>
-    cfg :: Dictionary := Watcher defaultConfig
+    cfg := Watcher defaultConfig
     self assert: (cfg at: #checks) size equals: 0

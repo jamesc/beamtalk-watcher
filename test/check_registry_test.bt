@@ -12,26 +12,26 @@ TestCase subclass: CheckRegistryTest
 
   /// Build a registry wired to a RecordingListener as the router.
   registryWithRouter -> Dictionary =>
-    router :: RecordingListener := RecordingListener spawn
-    registry :: CheckRegistry := CheckRegistry start: router
+    router := RecordingListener spawn
+    registry := CheckRegistry start: router
     #{#registry => registry, #router => router}
 
   /// Build a ScriptedHealthCheck that always succeeds.
   okCheck: name :: String -> ScriptedHealthCheck =>
-    ok :: CheckResult := CheckResult ok: name details: "ok"
+    ok := CheckResult ok: name details: "ok"
     ScriptedHealthCheck named: name results: (List withAll: #(ok))
 
   /// Build a ScriptedHealthCheck that always fails.
   failCheck: name :: String -> ScriptedHealthCheck =>
-    fail :: CheckResult := CheckResult fail: name details: "fail"
+    fail := CheckResult fail: name details: "fail"
     ScriptedHealthCheck named: name results: (List withAll: #(fail))
 
   // ===== Add monitor =====
   testAddRegistersMonitor =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    monitor :: Monitor := registry
+    check := self okCheck: "web"
+    monitor := registry
       add: check
       name: #web
       interval: 60
@@ -42,8 +42,8 @@ TestCase subclass: CheckRegistryTest
   testAddReturnsMonitor =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "api"
-    monitor :: Monitor := registry
+    check := self okCheck: "api"
+    monitor := registry
       add: check
       name: #api
       interval: 30
@@ -56,8 +56,8 @@ TestCase subclass: CheckRegistryTest
     // calls runCheck synchronously before scheduling the timer).
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "db"
-    monitor :: Monitor := registry
+    check := self okCheck: "db"
+    monitor := registry
       add: check
       name: #db
       interval: 60
@@ -68,14 +68,14 @@ TestCase subclass: CheckRegistryTest
   testAddMultipleMonitors =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check1 :: ScriptedHealthCheck := self okCheck: "web"
-    check2 :: ScriptedHealthCheck := self okCheck: "api"
-    m1 :: Monitor := registry
+    check1 := self okCheck: "web"
+    check2 := self okCheck: "api"
+    m1 := registry
       add: check1
       name: #web
       interval: 60
       threshold: 3
-    m2 :: Monitor := registry
+    m2 := registry
       add: check2
       name: #api
       interval: 30
@@ -90,8 +90,8 @@ TestCase subclass: CheckRegistryTest
   testRemoveUnregistersMonitor =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "temp"
-    _monitor :: Monitor := registry
+    check := self okCheck: "temp"
+    _monitor := registry
       add: check
       name: #temp
       interval: 60
@@ -104,7 +104,7 @@ TestCase subclass: CheckRegistryTest
     // indirectly by checking that the registry no longer tracks it.
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "ephemeral"
+    check := self okCheck: "ephemeral"
     registry
       add: check
       name: #ephemeral
@@ -126,27 +126,27 @@ TestCase subclass: CheckRegistryTest
   testStatusReturnsListOfSnapshots =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    monitor :: Monitor := registry
+    check := self okCheck: "web"
+    monitor := registry
       add: check
       name: #web
       interval: 60
       threshold: 3
-    snapshots :: List(Dictionary) := registry status
+    snapshots := registry status
     self assert: snapshots size equals: 1
     monitor stopMonitoring
 
   testStatusSnapshotShape =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    monitor :: Monitor := registry
+    check := self okCheck: "web"
+    monitor := registry
       add: check
       name: #web
       interval: 60
       threshold: 3
-    snapshots :: List(Dictionary) := registry status
-    snapshot :: Dictionary := snapshots at: 1
+    snapshots := registry status
+    snapshot := snapshots at: 1
     self assert: (snapshot includesKey: #name)
     self assert: (snapshot includesKey: #status)
     self assert: (snapshot includesKey: #lastResult)
@@ -156,16 +156,16 @@ TestCase subclass: CheckRegistryTest
   testStatusReflectsMonitorState =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "healthy"
-    monitor :: Monitor := registry
+    check := self okCheck: "healthy"
+    monitor := registry
       add: check
       name: #healthy
       interval: 60
       threshold: 3
     // Drive the monitor directly to populate its state
     monitor runCheck
-    snapshots :: List(Dictionary) := registry status
-    snapshot :: Dictionary := snapshots at: 1
+    snapshots := registry status
+    snapshot := snapshots at: 1
     // After successes below threshold, status is still #unknown
     self assert: (snapshot at: #status) equals: #unknown
     self deny: (snapshot at: #lastResult) == nil
@@ -179,19 +179,19 @@ TestCase subclass: CheckRegistryTest
   testStatusMultipleMonitors =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check1 :: ScriptedHealthCheck := self okCheck: "web"
-    check2 :: ScriptedHealthCheck := self failCheck: "db"
-    m1 :: Monitor := registry
+    check1 := self okCheck: "web"
+    check2 := self failCheck: "db"
+    m1 := registry
       add: check1
       name: #web
       interval: 60
       threshold: 3
-    m2 :: Monitor := registry
+    m2 := registry
       add: check2
       name: #db
       interval: 60
       threshold: 3
-    snapshots :: List(Dictionary) := registry status
+    snapshots := registry status
     self assert: snapshots size equals: 2
     m1 stopMonitoring
     m2 stopMonitoring
@@ -200,13 +200,13 @@ TestCase subclass: CheckRegistryTest
   testMonitorLookupReturnsSameActor =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    added :: Monitor := registry
+    check := self okCheck: "web"
+    added := registry
       add: check
       name: #web
       interval: 60
       threshold: 3
-    looked :: Monitor := registry monitor: #web
+    looked := registry monitor: #web
     self assert: added equals: looked
     added stopMonitoring
 
@@ -228,8 +228,8 @@ TestCase subclass: CheckRegistryTest
   testNamesReflectsRegisteredMonitors =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "alpha"
-    monitor :: Monitor := registry
+    check := self okCheck: "alpha"
+    monitor := registry
       add: check
       name: #alpha
       interval: 60
@@ -250,8 +250,8 @@ TestCase subclass: CheckRegistryTest
   testCrashedMonitorIsRespawnedUnderSameName =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    original :: Monitor := registry
+    check := self okCheck: "web"
+    original := registry
       add: check
       name: #web
       interval: 60
@@ -259,37 +259,37 @@ TestCase subclass: CheckRegistryTest
     original kill
     (Erlang timer) sleep: 300
     self assert: (registry names includes: #web)
-    respawned :: Monitor := registry monitor: #web
+    respawned := registry monitor: #web
     self deny: respawned == original
     self assert: respawned isAlive
 
   testRespawnedMonitorPreservesConfig =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    original :: Monitor := registry
+    check := self okCheck: "web"
+    original := registry
       add: check
       name: #web
       interval: 45
       threshold: 7
     original kill
     (Erlang timer) sleep: 300
-    respawned :: Monitor := registry monitor: #web
+    respawned := registry monitor: #web
     self assert: respawned interval equals: 45
     self assert: respawned threshold equals: 7
 
   testRespawnedMonitorResumesChecking =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "web"
-    original :: Monitor := registry
+    check := self okCheck: "web"
+    original := registry
       add: check
       name: #web
       interval: 60
       threshold: 3
     original kill
     (Erlang timer) sleep: 300
-    respawned :: Monitor := registry monitor: #web
+    respawned := registry monitor: #web
     // `start` on the respawned Monitor already ran an immediate `runCheck`;
     // confirm it actually recorded a result rather than sitting inert.
     self deny: respawned lastResult == nil
@@ -297,7 +297,7 @@ TestCase subclass: CheckRegistryTest
   testRemovedMonitorIsNotResurrectedAfterTermination =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    check :: ScriptedHealthCheck := self okCheck: "temp"
+    check := self okCheck: "temp"
     registry
       add: check
       name: #temp

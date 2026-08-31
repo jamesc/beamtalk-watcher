@@ -14,11 +14,11 @@ TestCase subclass: DashboardTest
   field: monitor :: Monitor | nil = nil
 
   setUp =>
-    rtr :: RecordingListener := RecordingListener spawn
+    rtr := RecordingListener spawn
     self.router := rtr
-    log :: AlertLog := AlertLog spawn
+    log := AlertLog spawn
     self.log := log
-    reg :: CheckRegistry := CheckRegistry start: rtr
+    reg := CheckRegistry start: rtr
     self.registry := reg
     // Seed a monitor so status/monitors pages have data
     okResult := CheckResult ok: "web" details: "HTTP 200"

@@ -31,9 +31,9 @@ TestCase subclass: MonitorTest
   /// `interval` is irrelevant for synchronous `runCheck` tests but must
   /// be a valid positive integer.
   monitorWith: results :: List(CheckResult) threshold: t :: Integer -> Dictionary =>
-    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "scripted" results: results
-    listener :: RecordingListener := RecordingListener spawn
-    monitor :: Monitor := Monitor
+    check := ScriptedHealthCheck named: "scripted" results: results
+    listener := RecordingListener spawn
+    monitor := Monitor
       check: check
       interval: 60
       threshold: t
@@ -71,7 +71,7 @@ TestCase subclass: MonitorTest
     monitor runCheck
     self assert: listener count equals: 1
     self assert: monitor status equals: #fail
-    event :: MonitorEvent := listener events at: 1
+    event := listener events at: 1
     self assert: event type equals: #alert
 
   testAdditionalFailuresAfterAlertEmitNothing =>
@@ -90,7 +90,7 @@ TestCase subclass: MonitorTest
     listener :: RecordingListener := rig at: #listener
     monitor runCheck
     monitor runCheck
-    event :: MonitorEvent := listener events at: 1
+    event := listener events at: 1
     self assert: event previousStatus equals: #unknown
 
   // ===== Acceptance: threshold consecutive successes emit #recovered =====
@@ -98,7 +98,7 @@ TestCase subclass: MonitorTest
     // 3 fails to trigger alert, then 3 oks to trigger recovery.
     ok := self okResult
     fail := self failResult
-    script :: List(CheckResult) := List withAll: #(fail, fail, fail, ok, ok, ok)
+    script := List withAll: #(fail, fail, fail, ok, ok, ok)
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     listener :: RecordingListener := rig at: #listener
@@ -111,12 +111,12 @@ TestCase subclass: MonitorTest
   testRecoveryEventCarriesPreviousFailStatus =>
     ok := self okResult
     fail := self failResult
-    script :: List(CheckResult) := List withAll: #(fail, fail, ok, ok)
+    script := List withAll: #(fail, fail, ok, ok)
     rig := self monitorWith: script threshold: 2
     monitor :: Monitor := rig at: #monitor
     listener :: RecordingListener := rig at: #listener
     1 to: 4 do: [:_ | monitor runCheck]
-    recovery :: MonitorEvent := listener events at: 2
+    recovery := listener events at: 2
     self assert: recovery type equals: #recovered
     self assert: recovery previousStatus equals: #fail
 
@@ -124,7 +124,7 @@ TestCase subclass: MonitorTest
     // After alert, only 2 oks (threshold is 3) — must not recover yet.
     ok := self okResult
     fail := self failResult
-    script :: List(CheckResult) := List withAll: #(fail, fail, fail, ok, ok)
+    script := List withAll: #(fail, fail, fail, ok, ok)
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     listener :: RecordingListener := rig at: #listener
@@ -139,7 +139,7 @@ TestCase subclass: MonitorTest
     // enough consecutive results to cross the threshold.
     ok := self okResult
     fail := self failResult
-    script :: List(CheckResult) := List withAll: #(ok, fail, ok, fail, ok, fail, ok, fail)
+    script := List withAll: #(ok, fail, ok, fail, ok, fail, ok, fail)
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     listener :: RecordingListener := rig at: #listener
@@ -152,7 +152,7 @@ TestCase subclass: MonitorTest
     // Threshold of 3 should never be reached.
     ok := self okResult
     fail := self failResult
-    script :: List(CheckResult) := List withAll: #(fail, fail, ok, fail, fail)
+    script := List withAll: #(fail, fail, ok, fail, fail)
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     listener :: RecordingListener := rig at: #listener
@@ -191,10 +191,8 @@ TestCase subclass: MonitorTest
     // assignments inside a block don't propagate to the enclosing scope.
     ok := self okResult
     fail := self failResult
-    base :: List(CheckResult) := List withAll: #(fail, fail, fail)
-    script :: List(CheckResult) := (1 to: 60) inject: base into: [:acc :_ |
-      acc add: ok
-    ]
+    base := List withAll: #(fail, fail, fail)
+    script := (1 to: 60) inject: base into: [:acc :_ | acc add: ok]
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     1 to: 63 do: [:_ | monitor runCheck]
@@ -236,9 +234,9 @@ TestCase subclass: MonitorTest
     // We deliberately avoid asserting on Timer-driven invocations here so
     // the test stays deterministic and fast.
     ok := self okResult
-    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "periodic" results: (List withAll: #(ok))
-    listener :: RecordingListener := RecordingListener spawn
-    monitor :: Monitor := Monitor
+    check := ScriptedHealthCheck named: "periodic" results: (List withAll: #(ok))
+    listener := RecordingListener spawn
+    monitor := Monitor
       check: check
       interval: 1
       threshold: 3
@@ -252,9 +250,9 @@ TestCase subclass: MonitorTest
     // extra immediate check. callCount should stay at 1 (the single
     // synchronous runCheck from the first start).
     ok := self okResult
-    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "idempotent" results: (List withAll: #(ok))
-    listener :: RecordingListener := RecordingListener spawn
-    monitor :: Monitor := Monitor
+    check := ScriptedHealthCheck named: "idempotent" results: (List withAll: #(ok))
+    listener := RecordingListener spawn
+    monitor := Monitor
       check: check
       interval: 60
       threshold: 3
@@ -266,9 +264,9 @@ TestCase subclass: MonitorTest
 
   testStopMonitoringIsIdempotent =>
     ok := self okResult
-    check :: ScriptedHealthCheck := ScriptedHealthCheck named: "stoppable" results: (List withAll: #(ok))
-    listener :: RecordingListener := RecordingListener spawn
-    monitor :: Monitor := Monitor
+    check := ScriptedHealthCheck named: "stoppable" results: (List withAll: #(ok))
+    listener := RecordingListener spawn
+    monitor := Monitor
       check: check
       interval: 60
       threshold: 3

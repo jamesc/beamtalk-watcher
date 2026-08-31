@@ -54,7 +54,7 @@ sealed typed Value subclass: HttpHealthCheck
   /// Run the HTTP request and return a CheckResult.
   check -> CheckResult =>
     options := #{#timeout => self.timeout}
-    result :: Result(HTTPResponse, Error) := HTTPClient
+    result := HTTPClient
       request: #get
       url: self.url
       options: options

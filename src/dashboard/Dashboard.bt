@@ -50,7 +50,7 @@ typed Actor subclass: Dashboard
 
   /// GET / — Overview page showing all monitors with current status.
   renderIndex: _req :: HTTPRequest -> HTTPResponse =>
-    statuses :: List(Dictionary) := self.registry status
+    statuses := self.registry status
     rows := statuses
       collect: [:s |
         status := s at: #status
@@ -83,7 +83,7 @@ typed Actor subclass: Dashboard
 
   /// GET /monitors — Detailed monitor listing page.
   renderMonitors: _req :: HTTPRequest -> HTTPResponse =>
-    statuses :: List(Dictionary) := self.registry status
+    statuses := self.registry status
     rows := statuses
       collect: [:s |
         status := s at: #status
@@ -121,7 +121,7 @@ typed Actor subclass: Dashboard
 
   /// GET /alerts — Alert log page, newest first.
   renderAlerts: _req :: HTTPRequest -> HTTPResponse =>
-    alerts :: List(Alert) := self.alertLog recent: 100
+    alerts := self.alertLog recent: 100
     rows := alerts
       collect: [:a |
         "<div class=""alert-item"">"
@@ -148,7 +148,7 @@ typed Actor subclass: Dashboard
 
   /// GET /api/status — JSON status of all monitors.
   apiStatus: _req :: HTTPRequest -> HTTPResponse =>
-    statuses :: List(Dictionary) := self.registry status
+    statuses := self.registry status
     entries := statuses
       collect: [:s |
         lastResult := s at: #lastResult
@@ -168,7 +168,7 @@ typed Actor subclass: Dashboard
 
   /// GET /api/alerts — JSON alert list.
   apiAlerts: _req :: HTTPRequest -> HTTPResponse =>
-    alerts :: List(Alert) := self.alertLog recent: 100
+    alerts := self.alertLog recent: 100
     entries := alerts
       collect: [:a |
         #{
@@ -191,7 +191,7 @@ typed Actor subclass: Dashboard
 
   /// GET /api/monitors/:name — JSON detail for a single monitor.
   apiMonitor: req :: HTTPRequest -> HTTPResponse =>
-    name :: String := req param: "name"
+    name := req param: "name"
     nameSymbol := name asAtom
     (self.registry names includes: nameSymbol)
       ifFalse: [
@@ -202,7 +202,7 @@ typed Actor subclass: Dashboard
             #body => "\{""error"":""monitor not found""}"
           }
       ]
-    monitor :: Monitor := self.registry monitor: nameSymbol
+    monitor := self.registry monitor: nameSymbol
     status := monitor status
     lastResult := monitor lastResult
     details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
@@ -223,7 +223,7 @@ typed Actor subclass: Dashboard
   /// GET /static/*path — Serve static files from the static/ directory.
   /// Rejects paths containing ".." to prevent directory traversal.
   serveStatic: req :: HTTPRequest -> HTTPResponse =>
-    filePath :: String := req param: "path"
+    filePath := req param: "path"
     // Guard against directory traversal
     (filePath includesSubstring: "..")
       ifTrue: [
