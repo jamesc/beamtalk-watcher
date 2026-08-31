@@ -47,6 +47,9 @@ sealed typed Value subclass: ProcessCheck
     pid == #undefined ifTrue: [
       ^CheckResult fail: self name details: "Process not registered"
     ]
+    // The `== #undefined` check above already ruled out the other union
+    // member; the checker doesn't narrow the type across it.
+    @expect type
     (self isAlive: pid) ifTrue: [
       CheckResult ok: self name details: "Process alive"
     ] ifFalse: [CheckResult fail: self name details: "Process not alive"]
@@ -60,11 +63,9 @@ sealed typed Value subclass: ProcessCheck
   // ===== Private FFI wrappers =====
 
   /// erlang:whereis/1 — returns a Pid or the atom #undefined.
-  whereisPid: atomName :: Symbol -> Object =>
+  whereisPid: atomName :: Symbol -> Pid | #undefined =>
     (Erlang erlang) whereis: atomName
 
-  /// erlang:is_process_alive/1 — typed as Boolean. `@expect type` confined
-  /// here since the FFI call itself surfaces as Dynamic.
-  isAlive: pid :: Object -> Boolean =>
-    @expect type
+  /// erlang:is_process_alive/1 — typed as Boolean.
+  isAlive: pid :: Pid -> Boolean =>
     (Erlang erlang) is_process_alive: pid
