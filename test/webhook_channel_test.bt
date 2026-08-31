@@ -112,6 +112,9 @@ TestCase subclass: WebhookChannelTest
       previousStatus: #ok
     channel := WebhookChannel url: "http://example.com/hook"
     payload := channel buildPayload: event
+    // JsonValue's Dictionary member is unparameterized; this payload is
+    // always a JSON object here.
+    @expect type
     parsed :: Dictionary(String, Any) := (Json parse: payload) unwrap
     self assert: (parsed at: "type") equals: "#alert"
     self assert: (parsed at: "check") equals: "HTTP http://localhost:3000/health"
@@ -133,6 +136,9 @@ TestCase subclass: WebhookChannelTest
       previousStatus: #fail
     channel := WebhookChannel url: "http://example.com/hook"
     payload := channel buildPayload: event
+    // JsonValue's Dictionary member is unparameterized; this payload is
+    // always a JSON object here.
+    @expect type
     parsed :: Dictionary(String, Any) := (Json parse: payload) unwrap
     self assert: (parsed includesKey: "type")
     self assert: (parsed includesKey: "check")

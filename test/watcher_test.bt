@@ -74,15 +74,14 @@ TestCase subclass: WatcherTest
   testAddHttpCheckBuildsHttpCheck =>
     // We can't `addCheckFromConfig:` an HTTP check without triggering a
     // real HTTP request, so verify the routing logic by calling the
-    // factory directly via the same dictionary shape.
-    cfg := #{#type => #http, #name => #api, #url => "http://localhost:1/health"}
-    check := HttpHealthCheck url: (cfg at: #url)
+    // factory directly with the same values `addCheckFromConfig:` would
+    // extract from a `#{#type => #http, ...}` config dictionary.
+    check := HttpHealthCheck url: "http://localhost:1/health"
     self assert: check class equals: HttpHealthCheck
     self assert: check target equals: "http://localhost:1/health"
 
   testAddTcpCheckBuildsTcpCheck =>
-    cfg := #{#type => #tcp, #name => #db, #host => "localhost", #port => 5432}
-    check := TcpPortCheck host: (cfg at: #host) port: (cfg at: #port)
+    check := TcpPortCheck host: "localhost" port: 5432
     self assert: check class equals: TcpPortCheck
     self assert: check target equals: "localhost:5432"
 

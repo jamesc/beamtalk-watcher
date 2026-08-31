@@ -30,18 +30,13 @@ typed Actor subclass: Dashboard
     }
     router := HTTPRouter
       build: [:r |
-        // Pages
-        r get: "/" handler: [:req | dash renderIndex: req]
-        r get: "/monitors" handler: [:req | dash renderMonitors: req]
-        r get: "/alerts" handler: [:req | dash renderAlerts: req]
-
-        // API (JSON)
-        r get: "/api/status" handler: [:req | dash apiStatus: req]
-        r get: "/api/alerts" handler: [:req | dash apiAlerts: req]
-        r get: "/api/monitors/:name" handler: [:req | dash apiMonitor: req]
-
-        // Static assets
-        r get: "/static/*path" handler: [:req | dash serveStatic: req]
+        r get: "/" handler: [:req | dash renderIndex: req];
+          get: "/monitors" handler: [:req | dash renderMonitors: req];
+          get: "/alerts" handler: [:req | dash renderAlerts: req];
+          get: "/api/status" handler: [:req | dash apiStatus: req];
+          get: "/api/alerts" handler: [:req | dash apiAlerts: req];
+          get: "/api/monitors/:name" handler: [:req | dash apiMonitor: req];
+          get: "/static/*path" handler: [:req | dash serveStatic: req]
       ]
     dash startServer: router
     dash

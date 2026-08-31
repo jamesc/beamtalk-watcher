@@ -19,7 +19,7 @@ TestCase subclass: ProcessCheckTest
       ifFalse: [
         // Resolve, then exit the process so the registration is released.
         pid := (Erlang erlang) whereis: self.registeredName
-        pid == #undefined ifFalse: [(Erlang erlang) exit: pid arg: #kill]
+        pid == #undefined ifFalse: [(Erlang erlang) exit: pid reason: #kill]
       ]
     self.registeredName := nil
 
@@ -31,7 +31,7 @@ TestCase subclass: ProcessCheckTest
   registerLongLivedAs: name :: Symbol =>
     sleeperFun := [(Erlang timer) sleep: #infinity]
     pid := (Erlang erlang) spawn: sleeperFun
-    (Erlang erlang) register: name arg: pid
+    (Erlang erlang) register: name pidorport: pid
     self.registeredName := name
 
   // ----- field defaults -----
