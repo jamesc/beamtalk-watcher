@@ -107,6 +107,20 @@ TestCase subclass: DashboardTest
     entry := parsed at: 1
     self assert: (entry at: "name") equals: "web"
 
+  // ===== GET /api/health — JSON =====
+  // `Dashboard start:registry:alertLog:` (the direct/test factory used by
+  // `setUp`) never calls `attachHealthReporter:` — only `Watcher` does
+  // (see WatcherTest for the wired case) — so this should report
+  // unavailable rather than error.
+  testApiHealthReturns200 =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/health") unwrap
+    self assert: resp status equals: 200
+
+  testApiHealthReturnsUnavailableWithoutReporter =>
+    resp := (HTTPClient get: self baseUrl ++ "/api/health") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "available") equals: false
+
   // ===== GET /api/alerts — JSON =====
   testApiAlertsReturns200 =>
     resp := (HTTPClient get: self baseUrl ++ "/api/alerts") unwrap

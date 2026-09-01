@@ -77,6 +77,16 @@
 ///     own state to survive its crash, which is a bigger change than
 ///     watching it for crashes.
 ///
+/// ## Health telemetry
+///
+/// `Watcher` implements `HealthReporter` so `Dashboard` can expose
+/// `/api/health` without a concrete dependency on `Watcher` itself.
+/// `subsystemHealth` reports, for each of the 5 sub-actors, whether it's
+/// currently alive and how many times `childExited:reason:` has restarted
+/// it within the current `restartWindow` — plus `CheckRegistry`'s own
+/// per-check restart data (`CheckRegistry>>restartHealth`), since a check
+/// crash-looping is just as worth surfacing as a sub-actor crash-looping.
+///
 /// See SPEC.md §12.
 typed Actor subclass: Watcher
   state: registry :: CheckRegistry | nil = nil
@@ -192,6 +202,7 @@ typed Actor subclass: Watcher
       configure: dashPort
       registry: self.registry
       alertLog: self.alertLog
+    self.dashboard attachHealthReporter: self
     self.dashboard startServer: self.dashboard buildRouter
     self.dashboard onExit: [:reason |
       self childExited: #dashboard reason: reason!
@@ -215,27 +226,33 @@ typed Actor subclass: Watcher
   /// every restart) must not be left to either loop forever or crash
   /// `Watcher` itself — both are caught and logged, leaving that one
   /// subsystem down rather than escalating.
+  /// `self recordRestartAttempt: which` must be a top-level statement of
+  /// THIS method, not nested inside a block passed to ifTrue:/ifFalse: —
+  /// a mutating self-call loses its mutation once something else in the
+  /// same block reads/branches on its result, even bound to a local first
+  /// (confirmed via a minimal repro; filed as BT-3382). Hence the early
+  /// `^self` guard below instead of wrapping the rest of the method in
+  /// `self.shuttingDown ifFalse: [...]`.
   internal childExited: which :: Symbol reason: _reason :: Object -> Watcher =>
-    self.shuttingDown
+    self.shuttingDown ifTrue: [^self]
+    withinBudget := self recordRestartAttempt: which
+    withinBudget
+      ifTrue: [
+        [self respawn: which]
+          on: Error
+          do: [:e |
+            Logger error: "Watcher: " ++ which printString ++ " failed to restart: " ++ e printString
+          ]
+      ]
       ifFalse: [
-        (self recordRestartAttempt: which)
-          ifTrue: [
-            [self respawn: which]
-              on: Error
-              do: [:e |
-                Logger error: "Watcher: " ++ which printString ++ " failed to restart: " ++ e printString
-              ]
-          ]
-          ifFalse: [
-            Logger
-              error: "Watcher: "
-                ++ which printString
-                ++ " crashed "
-                ++ (Watcher maxRestarts) printString
-                ++ "+ times within "
-                ++ (Watcher restartWindow) printString
-                ++ "s — giving up on it"
-          ]
+        Logger
+          error: "Watcher: "
+            ++ which printString
+            ++ " crashed "
+            ++ (Watcher maxRestarts) printString
+            ++ "+ times within "
+            ++ (Watcher restartWindow) printString
+            ++ "s — giving up on it"
       ]
     self
 
@@ -278,11 +295,11 @@ typed Actor subclass: Watcher
     recent size < Watcher maxRestarts
 
   /// Register a single check from a config dictionary. Recognised keys:
-  ///   * `#type`      — `#http` | `#tcp` | `#process` (required)
+  ///   * `#type`      — `#http` | `#tcp` | `#process` | `#tls` (required)
   ///   * `#name`      — Symbol used as the registry key (required)
   ///   * `#url`       — for `#http` checks (required when `#type == #http`)
-  ///   * `#host`      — for `#tcp` checks
-  ///   * `#port`      — for `#tcp` checks
+  ///   * `#host`      — for `#tcp` and `#tls` checks
+  ///   * `#port`      — for `#tcp` and `#tls` checks (default 443 for `#tls`)
   ///   * `#process`   — name (Symbol or String) for `#process` checks
   ///   * `#interval`  — polling interval in seconds (default 30)
   ///   * `#threshold` — consecutive results before transition (default 3)
@@ -302,11 +319,19 @@ typed Actor subclass: Watcher
             TcpPortCheck host: (checkConfig at: #host) port: (checkConfig at: #port)
           ]
           ifFalse: [
-            type == #process ifTrue: [
-              ProcessCheck name: (checkConfig at: #process)
-            ] ifFalse: [
-              ^Error signal: "Unknown check type: " ++ type printString
-            ]
+            type == #process
+              ifTrue: [ProcessCheck name: (checkConfig at: #process)]
+              ifFalse: [
+                type == #tls
+                  ifTrue: [
+                    TlsCertCheck host: (checkConfig at: #host) port: (checkConfig at: #port ifAbsent: [
+                      443
+                    ])
+                  ]
+                  ifFalse: [
+                    ^Error signal: "Unknown check type: " ++ type printString
+                  ]
+              ]
           ]
       ]
     self.registry
@@ -335,6 +360,67 @@ typed Actor subclass: Watcher
 
   /// The configuration dictionary supplied to `startWith:`.
   config -> Dictionary => self.config
+
+  // ===== HealthReporter protocol =====
+
+  /// Snapshot of every supervised sub-actor (alive? / restarts within the
+  /// current window?) plus `CheckRegistry`'s own per-check restart data.
+  /// See the class doc comment's "Health telemetry" section.
+  subsystemHealth -> Dictionary =>
+    #{
+      #subsystems => self subsystemHealthList,
+      #checks => (self.registry isNil ifTrue: [
+        List withAll: #()
+      ] ifFalse: [self.registry restartHealth])
+    }
+
+  /// Health entries for the 5 fixed sub-actor roles, in `bringUp:` order.
+  /// `List withAll:`, not a bare `#(...)` Array literal — `collect:`
+  /// preserves species, and `Json generate:` (via `Dashboard>>apiHealth:`)
+  /// only accepts `List`, not `Array`.
+  internal subsystemHealthList -> List(Dictionary) =>
+    (List withAll: #(#alertLog, #router, #registry, #receiver, #dashboard)) collect: [:role |
+      self healthFor: role
+    ]
+
+  /// Alive/restart-count snapshot for a single sub-actor role.
+  internal healthFor: role :: Symbol -> Dictionary =>
+    actor := self actorFor: role
+    #{
+      #name => role,
+      #alive => (actor isNil ifTrue: [false] ifFalse: [actor isAlive]),
+      #restartCount => self restartCountFor: role
+    }
+
+  /// The current actor instance for a sub-actor role — nested
+  /// `ifTrue:ifFalse:` for the same reason as `respawn:` (see BT-3378).
+  internal actorFor: role :: Symbol -> Actor | nil =>
+    role == #alertLog
+      ifTrue: [self.alertLog]
+      ifFalse: [
+        role == #router
+          ifTrue: [self.router]
+          ifFalse: [
+            role == #registry
+              ifTrue: [self.registry]
+              ifFalse: [
+                role == #receiver ifTrue: [
+                  self.receiver
+                ] ifFalse: [
+                  role == #dashboard ifTrue: [self.dashboard] ifFalse: [nil]
+                ]
+              ]
+          ]
+      ]
+
+  /// Count of restarts recorded for `role` within the last `restartWindow`
+  /// seconds. Recomputed on demand, mirroring `CheckRegistry>>restartCountFor:`.
+  internal restartCountFor: role :: Symbol -> Integer =>
+    now := DateTime now
+    recent := (self.restartTimestamps at: role ifAbsent: [
+      #()
+    ]) select: [:t | (now diffSeconds: t) < Watcher restartWindow]
+    recent size
 
   // ===== Lifecycle =====
 

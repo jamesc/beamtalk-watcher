@@ -18,6 +18,7 @@ typed Actor subclass: Dashboard
   state: server :: HTTPServer | nil = nil
   state: registry :: CheckRegistry | nil = nil
   state: alertLog :: AlertLog | nil = nil
+  state: healthReporter :: HealthReporter | nil = nil
   state: port :: Integer = 0
 
   /// Spawn a Dashboard on `aPort`, wired to the given registry and alert log.
@@ -42,6 +43,14 @@ typed Actor subclass: Dashboard
     self.alertLog := log
     self
 
+  /// Attach the `HealthReporter` that powers `/api/health` (the owning
+  /// `Watcher`, typically). Separate from `configure:registry:alertLog:`
+  /// so that method's signature — shared with the direct/test factory
+  /// `start:registry:alertLog:` — doesn't need to change for every caller.
+  attachHealthReporter: reporter :: HealthReporter -> Dashboard =>
+    self.healthReporter := reporter
+    self
+
   /// Build this dashboard's route table. Split out from `startServer:` so
   /// both the direct factory and the supervised-startup path can share it.
   buildRouter -> HTTPRouter =>
@@ -51,6 +60,7 @@ typed Actor subclass: Dashboard
           get: "/monitors" handler: [:req | self renderMonitors: req];
           get: "/alerts" handler: [:req | self renderAlerts: req];
           get: "/api/status" handler: [:req | self apiStatus: req];
+          get: "/api/health" handler: [:req | self apiHealth: req];
           get: "/api/alerts" handler: [:req | self apiAlerts: req];
           get: "/api/monitors/:name" handler: [:req | self apiMonitor: req];
           get: "/static/*path" handler: [:req | self serveStatic: req]
@@ -174,6 +184,49 @@ typed Actor subclass: Dashboard
         #status => 200,
         #headers => #(#("content-type", "application/json")),
         #body => Json generate: entries
+      }
+
+  /// GET /api/health — JSON snapshot of the owning Watcher's supervised
+  /// sub-actors and CheckRegistry's tracked checks: whether each is alive
+  /// and how many times it's been restarted within the current crash-loop
+  /// window. `{"available": false}` when no `HealthReporter` is attached
+  /// (the direct/test factory `start:registry:alertLog:` doesn't set one).
+  ///
+  /// The `#{...}` conversion is inlined directly in each `collect:` block
+  /// below rather than delegated to a helper method (contrast
+  /// `apiStatus:`'s block, which does the same) — `subsystems collect:
+  /// [:s | self healthEntryJson: s]` (calling a helper) demonstrably
+  /// degrades the result's species from `List` to `Tuple`, and `Json
+  /// generate:` doesn't accept `Tuple`. Confirmed by isolating the two
+  /// otherwise-identical shapes side by side; filed as BT-3383.
+  apiHealth: _req :: HTTPRequest -> HTTPResponse =>
+    data := self.healthReporter isNil
+      ifTrue: [#{"available" => false}]
+      ifFalse: [
+        health := self.healthReporter subsystemHealth
+        subsystems := health at: #subsystems
+        checks := health at: #checks
+        #{"available" => true, "subsystems" => subsystems
+            collect: [:s |
+              #{
+                "name" => (s at: #name) displayString,
+                "alive" => s at: #alive,
+                "restartCount" => s at: #restartCount
+              }
+            ], "checks" => checks
+            collect: [:c |
+              #{
+                "name" => (c at: #name) displayString,
+                "alive" => c at: #alive,
+                "restartCount" => c at: #restartCount
+              }
+            ]}
+      ]
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: data
       }
 
   /// GET /api/alerts — JSON alert list.

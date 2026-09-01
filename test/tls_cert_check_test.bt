@@ -1,0 +1,109 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// Tests for TlsCertCheck.
+///
+/// Coverage: field defaults, factories, name/target formatting, and every
+/// hermetic failure path (connection refused, bad host, handshake failure
+/// against a non-TLS listener). The "ok" path — a real TLS handshake
+/// against a trusted, unexpired, hostname-matching certificate — was
+/// verified manually during development against live endpoints
+/// (example.com for a valid cert; expired.badssl.com, self-signed.badssl.com,
+/// and wrong.host.badssl.com for the corresponding failure reasons) rather
+/// than committed as a test here: a hermetic version would need either a
+/// local certificate with a custom Subject Alt Name (which `public_key`
+/// only supports via hand-built raw ASN.1 `#'Extension'{}` records — an
+/// OTP-internal-record shape this project avoids elsewhere, see
+/// `TlsCertCheck>>hostCharlist`) or connecting via the test machine's own
+/// resolvable hostname (environment-dependent, not portable to CI). The
+/// failure-path tests below exercise the exact same `check`/
+/// `connectAndValidate`/`okResultFor:` machinery the ok path runs through.
+TestCase subclass: TlsCertCheckTest
+  field: listenSock = nil
+
+  tearDown =>
+    self.listenSock isNil ifFalse: [(Erlang gen_tcp) close: self.listenSock]
+    self.listenSock := nil
+
+  // ----- helpers -----
+
+  /// Start a plain (non-TLS) listening TCP socket on an ephemeral port.
+  /// A `TlsCertCheck` pointed at it will fail the handshake immediately,
+  /// since nothing on the other end speaks TLS.
+  startPlainListener -> Integer =>
+    listenResult := (Erlang gen_tcp) listen: 0 options: #()
+    self.listenSock := listenResult unwrap
+    portResult := (Erlang inet) port: self.listenSock
+    portResult unwrap
+
+  // ----- field defaults -----
+  testDefaultsForNewInstance =>
+    check := TlsCertCheck new
+    self assert: check host equals: "localhost"
+    self assert: check port equals: 443
+    self assert: check timeout equals: 5000
+
+  testFactorySetsHost =>
+    check := TlsCertCheck host: "example.com"
+    self assert: check host equals: "example.com"
+    self assert: check port equals: 443
+    self assert: check timeout equals: 5000
+
+  testFactorySetsHostAndPort =>
+    check := TlsCertCheck host: "example.com" port: 8443
+    self assert: check host equals: "example.com"
+    self assert: check port equals: 8443
+
+  testFactoryWithTimeoutSetsAllFields =>
+    check := TlsCertCheck
+      host: "example.com"
+      port: 8443
+      timeout: 1500
+    self assert: check timeout equals: 1500
+
+  testNameAndTargetIncludeHostAndPort =>
+    check := TlsCertCheck host: "example.com" port: 8443
+    self assert: check name equals: "TLS example.com:8443"
+    self assert: check target equals: "example.com:8443"
+
+  // ----- refused: nothing listening -----
+  testRefusedPortProducesFailResult =>
+    // Port 1 (TCPMUX) is reserved and effectively never listening on dev
+    // hosts — see TcpPortCheckTest for the same trick.
+    check := TlsCertCheck
+      host: "127.0.0.1"
+      port: 1
+      timeout: 1000
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "TLS error")
+
+  // ----- bad host: DNS resolution fails -----
+  testBadHostProducesFailResult =>
+    check := TlsCertCheck
+      host: "no-such-host.invalid"
+      port: 443
+      timeout: 1000
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "TLS error")
+
+  // ----- handshake failure: TCP is open but nothing speaks TLS -----
+  testNonTlsPeerProducesFailResult =>
+    port := self startPlainListener
+    check := TlsCertCheck
+      host: "127.0.0.1"
+      port: port
+      timeout: 2000
+    result := check check
+    self assert: result isFail
+    self assert: (result details includesSubstring: "TLS error")
+
+  // ----- unsupported host characters raise rather than mis-encode -----
+  testUnsupportedHostCharacterRaises =>
+    check := TlsCertCheck host: "exämple.com"
+    result := [
+      check check
+      #did_not_raise
+    ] on: Error do: [:e | #raised]
+    self assert: result equals: #raised

@@ -47,9 +47,6 @@ sealed typed Value subclass: ProcessCheck
     pid == #undefined ifTrue: [
       ^CheckResult fail: self name details: "Process not registered"
     ]
-    // The `== #undefined` check above already ruled out the other union
-    // member; the checker doesn't narrow the type across it.
-    @expect type
     (self isAlive: pid) ifTrue: [
       CheckResult ok: self name details: "Process alive"
     ] ifFalse: [CheckResult fail: self name details: "Process not alive"]

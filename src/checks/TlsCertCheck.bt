@@ -1,0 +1,163 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// TlsCertCheck — `HealthCheck` implementation that verifies a TLS endpoint
+/// presents a currently valid, trusted certificate for the given hostname.
+///
+/// Opens a TLS connection to `host:port` via `ssl:connect/4` with
+/// `verify_peer` against the system's default CA trust store
+/// (`public_key:cacerts_get/0`) and SNI set to `host`. The handshake itself
+/// performs full chain, expiry, and hostname validation, so a successful
+/// connect *is* the check — nothing is separately decoded/inspected.
+///
+/// Returns a `CheckResult`:
+///   - `ok` when the handshake completes and the certificate is valid
+///     (trusted chain, not expired, hostname matches)
+///   - `fail` when the handshake fails for any reason — expired
+///     certificate, untrusted/self-signed certificate, hostname mismatch,
+///     connection refused, DNS failure, or timeout — `details` includes
+///     the raw alert/error reason
+///
+/// ## Scope
+/// This reports whether the certificate is *currently* valid, not how many
+/// days remain until expiry. A proactive "expires within N days" warning
+/// would need the certificate's `notAfter` field, which OTP only exposes
+/// by decoding into `#'OTPCertificate'{}` and picking the field out by
+/// position from a `public_key`-internal record shape — fragile across OTP
+/// versions, so left out; verified handshake success/failure is the
+/// documented, stable surface. A possible future addition.
+///
+/// ## Examples
+/// ```beamtalk
+/// check := TlsCertCheck host: "example.com"
+/// check check       // => CheckResult ok: ... details: "TLS handshake ok, certificate valid"
+///
+/// check := TlsCertCheck host: "expired.badssl.com"
+/// check check       // => CheckResult fail: ... details: "TLS error: {tls_alert,{certificate_expired,...}}"
+/// ```
+sealed typed Value subclass: TlsCertCheck
+  field: host :: String = "localhost"
+  field: port :: Integer = 443
+  field: timeout :: Integer = 5000
+
+  // ===== Class-side factories =====
+
+  /// Build a check for `aHost` on the default port (443) and timeout.
+  class host: aHost :: String -> TlsCertCheck => self new: #{#host => aHost}
+
+  /// Build a check for `aHost:aPort` with the default timeout.
+  class host: aHost :: String port: aPort :: Integer -> TlsCertCheck =>
+    self new: #{#host => aHost, #port => aPort}
+
+  /// Build a check with an explicit connect timeout (milliseconds).
+  class host: aHost :: String port: aPort :: Integer timeout: ms :: Integer -> TlsCertCheck =>
+    self new: #{#host => aHost, #port => aPort, #timeout => ms}
+
+  /// Codepoint lookup table for the RFC 1123 hostname charset. See
+  /// `hostCharlist` for why this exists instead of an Erlang round-trip.
+  ///
+  /// `@expect dead_assignment` below: `beamtalk lint` claims reassigning
+  /// `dict` inside each `do:` block "has no effect" (Value-type blocks
+  /// supposedly capture by value) — confirmed false positive by dumping
+  /// `hostCharCodes` at runtime (all 64 entries present and correct).
+  /// `inject:into:` avoids the reassignment shape entirely but isn't used
+  /// instead: its generic accumulator type isn't resolved concretely even
+  /// with an explicitly-typed seed value, which trades this one lint
+  /// false-positive for six real `beamtalk lint`/`build` Dynamic-type
+  /// warnings. Note `beamtalk build` (unlike `beamtalk lint`) doesn't run
+  /// this check at all, so it reports this same `@expect` as stale — a
+  /// tooling inconsistency (filed as BT-3384), not a sign the suppression
+  /// is wrong.
+  @expect dead_assignment
+  class hostCharCodes -> Dictionary(String, Integer) =>
+    dict := #{}
+    97 to: 122 do: [:code |
+      dict := dict at: (String fromCodePoint: code) put: code
+    ]
+    65 to: 90 do: [:code |
+      dict := dict at: (String fromCodePoint: code) put: code
+    ]
+    48 to: 57 do: [:code |
+      dict := dict at: (String fromCodePoint: code) put: code
+    ]
+    dict := dict at: "-" put: 45
+    dict at: "." put: 46
+
+  // ===== HealthCheck protocol =====
+
+  /// Perform the TLS handshake and return a CheckResult describing the outcome.
+  check -> CheckResult =>
+    result := self connectAndValidate
+    result ifOk: [:sock |
+      self okResultFor: sock
+    ] ifError: [:err | self errorResultFor: err]
+
+  /// Human-readable name — "TLS <host>:<port>".
+  name -> String => "TLS " ++ self.host ++ ":" ++ self.port printString
+
+  /// Target string — "<host>:<port>".
+  target -> String => self.host ++ ":" ++ self.port printString
+
+  // ===== Private FFI wrappers =====
+
+  /// ssl:connect/4 — returns a Result(Socket, Object). The FFI is untyped
+  /// so the call surfaces as Dynamic; the typed return on this helper lets
+  /// the caller see a typed Result (mirrors TcpPortCheck>>connectSocket).
+  @expect type
+  internal connectAndValidate -> Result(Object, Object) =>
+    (Erlang ssl)
+      connect: self.host asAtom
+      port: self.port
+      opts: self connectOptions
+      timeout: self.timeout
+
+  /// `verify_peer` against the system CA trust store, SNI set to `host` —
+  /// this makes the handshake itself validate the chain, expiry, and
+  /// hostname, so a successful connect is the entire check.
+  internal connectOptions -> List =>
+    #((Tuple withAll: #(#verify, #verify_peer)), (Tuple withAll: #(#server_name_indication, self hostCharlist)), (Tuple withAll: #(#cacerts, self systemCaCerts)))
+
+  /// public_key:cacerts_get/0 — the OS's default trusted CA bundle. Split
+  /// across two methods because the module reference and the call each
+  /// need a different, mutually-exclusive `@expect` category on the same
+  /// line if combined: `public_key` isn't in the compiler's known-OTP-
+  /// module list (needs `unresolved_ffi`, even though the module exists
+  /// at runtime — it ships with every Erlang/OTP install), and the call's
+  /// return type is Dynamic (needs `type`). A single expression can only
+  /// carry one `@expect` category (BT-3387).
+  internal systemCaCerts -> Object => self publicKeyModule cacerts_get
+
+  @expect unresolved_ffi
+  internal publicKeyModule -> ErlangModule => Erlang public_key
+
+  /// `server_name_indication` must be a genuine Erlang charlist (a plain
+  /// list of integer code points) — `ssl` rejects a String/binary value
+  /// outright with `{options,{server_name_indication,_}}`. Building it
+  /// from `TlsCertCheck hostCharCodes` (rather than round-tripping
+  /// `self.host` through an Erlang charlist-producing call like
+  /// `erlang:binary_to_list/1`) sidesteps a real FFI gotcha: any charlist
+  /// an Erlang FFI call *returns* is auto-boxed back into a beamtalk
+  /// String at the boundary, which immediately undoes the conversion. A
+  /// List built directly in beamtalk source has no such round-trip and
+  /// marshals out as a genuine charlist. The lookup table covers the full
+  /// RFC 1123 hostname charset (letters, digits, `-`, `.`) — every legal
+  /// DNS name; any other character raises rather than silently mis-encoding.
+  internal hostCharlist -> List(Integer) =>
+    codes := TlsCertCheck hostCharCodes
+    chars := self.host asList
+    chars
+      collect: [:ch |
+        codes at: ch ifAbsent: [
+          ^Error signal: "Unsupported character in TLS host: " ++ ch
+        ]
+      ]
+
+  /// Close the now-verified socket and build the `ok` result.
+  internal okResultFor: sock :: Object -> CheckResult =>
+    (Erlang ssl) close: sock
+    CheckResult ok: self name details: "TLS handshake ok, certificate valid"
+
+  /// Build a `CheckResult fail` from an ssl-layer error (expired,
+  /// untrusted, hostname mismatch, refused, timeout, ...).
+  internal errorResultFor: err :: Object -> CheckResult =>
+    CheckResult fail: self name details: "TLS error: " ++ err printString

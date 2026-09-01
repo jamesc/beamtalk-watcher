@@ -89,6 +89,13 @@ TestCase subclass: WatcherTest
     self assert: check class equals: TcpPortCheck
     self assert: check target equals: "localhost:5432"
 
+  testAddTlsCheckBuildsTlsCheck =>
+    // Same reasoning as the HTTP/TCP cases above — a real handshake
+    // attempt (even a fast-failing one) doesn't belong in a routing test.
+    check := TlsCertCheck host: "example.com" port: 8443
+    self assert: check class equals: TlsCertCheck
+    self assert: check target equals: "example.com:8443"
+
   testAddProcessCheckRegistersByName =>
     self.watcher
       addCheckFromConfig: #{
@@ -221,3 +228,82 @@ TestCase subclass: WatcherTest
     // tearDown-safe means) instance instead of staying put.
     self assert: self.watcher dashboard == dashboardBeforeShutdown
     self deny: self.watcher dashboard isAlive
+
+  // ===== Crash-loop protection (maxRestarts/restartWindow) =====
+  //
+  // `childExited:reason:` gives up on a sub-actor once it's crashed
+  // `maxRestarts` times within `restartWindow` seconds, leaving it down
+  // rather than respawning forever — see the class doc comment's Supervision
+  // section. This pins down the give-up behavior directly: `maxRestarts + 1`
+  // crashes in a row should leave `dashboard` dead after the last one,
+  // whereas every earlier crash respawned it successfully.
+  testWatcherGivesUpRespawningAfterMaxRestarts =>
+    1
+      to: Watcher maxRestarts + 1
+      do: [:i |
+        current := self.watcher dashboard
+        current kill
+        (Erlang timer) sleep: 300
+      ]
+    self deny: self.watcher dashboard isAlive
+
+  // ===== Health telemetry =====
+  //
+  // `subsystemHealth` (the `HealthReporter` protocol method) and
+  // Dashboard's `/api/health` route surface the same restart-loop-
+  // protection state `childExited:reason:` already tracks internally —
+  // these pin down that it's actually wired through, not just recorded.
+  testSubsystemHealthListsAllFiveRoles =>
+    health := self.watcher subsystemHealth
+    subsystems := health at: #subsystems
+    self assert: subsystems size equals: 5
+    names := subsystems collect: [:s | s at: #name]
+    self assert: (names includes: #alertLog)
+    self assert: (names includes: #router)
+    self assert: (names includes: #registry)
+    self assert: (names includes: #receiver)
+    self assert: (names includes: #dashboard)
+
+  testSubsystemHealthReportsAliveAndNoRestartsInitially =>
+    health := self.watcher subsystemHealth
+    subsystems := health at: #subsystems
+    subsystems
+      do: [:s |
+        self assert: (s at: #alive)
+        self assert: (s at: #restartCount) equals: 0
+      ]
+
+  testSubsystemHealthChecksEmptyWithNoChecksConfigured =>
+    health := self.watcher subsystemHealth
+    self assert: (health at: #checks) isEmpty
+
+  testSubsystemHealthReflectsRestartCountAfterCrash =>
+    self.watcher dashboard kill
+    (Erlang timer) sleep: 500
+    health := self.watcher subsystemHealth
+    subsystems := health at: #subsystems
+    dashboardEntry := subsystems detect: [:s | (s at: #name) == #dashboard]
+    self assert: (dashboardEntry at: #restartCount) equals: 1
+    self assert: (dashboardEntry at: #alive)
+
+  testSubsystemHealthReflectsGivenUpState =>
+    1
+      to: Watcher maxRestarts + 1
+      do: [:i |
+        current := self.watcher dashboard
+        current kill
+        (Erlang timer) sleep: 300
+      ]
+    health := self.watcher subsystemHealth
+    subsystems := health at: #subsystems
+    dashboardEntry := subsystems detect: [:s | (s at: #name) == #dashboard]
+    self assert: (dashboardEntry at: #restartCount) equals: Watcher maxRestarts + 1
+    self deny: (dashboardEntry at: #alive)
+
+  testApiHealthReflectsWiredSubsystems =>
+    url := "http://localhost:" ++ self.watcher dashboard port printString ++ "/api/health"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "available") equals: true
+    self assert: (parsed at: "subsystems") size equals: 5

@@ -309,3 +309,108 @@ TestCase subclass: CheckRegistryTest
     // the registry's own crash-recovery path racing back in afterward.
     (Erlang timer) sleep: 300
     self deny: (registry names includes: #temp)
+
+  // ===== Crash-loop protection (maxRestarts/restartWindow) =====
+  //
+  // `monitorExited:reason:` gives up (drops the check) once a Monitor has
+  // crashed `maxRestarts` times within `restartWindow` seconds, so a check
+  // that crashes on every single restart doesn't respawn forever. This
+  // pins down the give-up behavior itself directly — repeatedly `kill`ing
+  // the current live Monitor instance (same technique the respawn tests
+  // above use) `maxRestarts + 1` times, past the budget.
+  testMonitorGivesUpAfterMaxRestarts =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check := self okCheck: "flaky"
+    // A long interval keeps the Timer from firing a scheduled check
+    // mid-test — every crash here is a deliberate `kill`, not the check
+    // itself failing.
+    registry
+      add: check
+      name: #flaky
+      interval: 9999
+      threshold: 3
+    1
+      to: CheckRegistry maxRestarts + 1
+      do: [:i |
+        current := registry monitor: #flaky
+        current kill
+        (Erlang timer) sleep: 300
+      ]
+    self deny: (registry names includes: #flaky)
+
+  testRestartBudgetResetsOutsideWindow =>
+    // A check that crashes once, gets respawned, and never crashes again
+    // should NOT be treated as still "within" a crash loop — this isn't
+    // testing time-based expiry directly (that would need a multi-minute
+    // sleep) but confirms a single crash well under budget still respawns
+    // normally and stays registered.
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check := self okCheck: "web"
+    original := registry
+      add: check
+      name: #web
+      interval: 9999
+      threshold: 3
+    original kill
+    (Erlang timer) sleep: 300
+    self assert: (registry names includes: #web)
+    self assert: (registry monitor: #web) isAlive
+
+  // ===== restartHealth =====
+  testRestartHealthEmptyWhenNoChecks =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    self assert: registry restartHealth isEmpty
+
+  testRestartHealthReportsAliveWithZeroRestartsInitially =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check := self okCheck: "web"
+    monitor := registry
+      add: check
+      name: #web
+      interval: 60
+      threshold: 3
+    health := registry restartHealth
+    self assert: health size equals: 1
+    entry := health at: 1
+    self assert: (entry at: #name) equals: #web
+    self assert: (entry at: #alive)
+    self assert: (entry at: #restartCount) equals: 0
+    monitor stopMonitoring
+
+  testRestartHealthReflectsRestartCountAfterCrash =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check := self okCheck: "web"
+    original := registry
+      add: check
+      name: #web
+      interval: 9999
+      threshold: 3
+    original kill
+    (Erlang timer) sleep: 300
+    health := registry restartHealth
+    entry := health detect: [:e | (e at: #name) == #web]
+    self assert: (entry at: #restartCount) equals: 1
+    self assert: (entry at: #alive)
+
+  testRestartHealthOmitsGivenUpChecks =>
+    rig := self registryWithRouter
+    registry :: CheckRegistry := rig at: #registry
+    check := self okCheck: "flaky"
+    registry
+      add: check
+      name: #flaky
+      interval: 9999
+      threshold: 3
+    1
+      to: CheckRegistry maxRestarts + 1
+      do: [:i |
+        current := registry monitor: #flaky
+        current kill
+        (Erlang timer) sleep: 300
+      ]
+    self assert: registry restartHealth isEmpty

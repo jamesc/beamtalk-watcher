@@ -1,0 +1,15 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// HealthReporter — protocol for actors that can report their own
+/// supervised sub-actors' liveness and restart-loop-protection state.
+///
+/// The only implementor is `Watcher`. `Dashboard` is typed against this
+/// protocol (not the concrete `Watcher` class) so it can power `/api/health`
+/// without depending on `Watcher` directly — mirrors `EventListener`'s role
+/// for `NotificationRouter`/`Monitor`.
+Protocol define: HealthReporter
+  /// Snapshot of this component's supervised children: for each, whether
+  /// it's currently alive and how many times it's been restarted within
+  /// the current crash-loop-protection window. See `Watcher>>subsystemHealth`.
+  subsystemHealth -> Dictionary
