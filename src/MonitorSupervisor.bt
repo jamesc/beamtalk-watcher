@@ -5,10 +5,19 @@
 ///
 /// `CheckRegistry` starts children through this supervisor instead of
 /// calling `Monitor spawnWith:` directly, so a crash in one check's
-/// `Monitor` (e.g. an unhandled error inside its `HealthCheck check`) gets
-/// an automatic OTP restart — per `Monitor supervisionPolicy` (`#permanent`)
-/// — instead of silently going dark until someone notices and re-adds the
-/// check by hand.
+/// `Monitor` (e.g. an unhandled error inside its `HealthCheck check`) is
+/// cleanly torn down and removable via `terminateChild:` instead of
+/// leaking a dead-but-registered process.
+///
+/// `Monitor supervisionPolicy` stays `#temporary` (the `Actor` default) —
+/// OTP does *not* auto-restart Monitors here. `CheckRegistry` drives the
+/// restart itself (`Actor>>onExit:` + `startChild:` with the remembered
+/// config), because it needs the pid `startChild:` hands back to keep its
+/// own name→pid lookup table current; `DynamicSupervisor` has no way to
+/// surface a child's new pid after a *silent* OTP-driven restart (BT-3376).
+/// Setting `#permanent` here on top of that manual restart would double-
+/// restart — OTP and `CheckRegistry` racing to spawn a replacement. See
+/// `CheckRegistry`'s Supervision doc comment for the full story.
 ///
 /// See SPEC.md §3, §10.
 DynamicSupervisor(Monitor) subclass: MonitorSupervisor

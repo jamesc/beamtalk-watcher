@@ -89,6 +89,17 @@ typed Actor subclass: Watcher
   // the deliberate teardown of alertLog/router (plain `Actor>>stop`, which
   // also fires `onExit:`) as a crash to recover from.
   state: shuttingDown :: Boolean = false
+  // Per-child restart timestamps, for `maxRestarts`/`restartWindow` —
+  // see `childExited:reason:`.
+  state: restartTimestamps :: Dictionary(Symbol, List(DateTime)) = #{}
+
+  /// Maximum respawn attempts per sub-actor within `restartWindow`
+  /// seconds before `childExited:reason:` gives up on it. Matches
+  /// `DynamicSupervisor`'s own defaults for familiarity.
+  class maxRestarts -> Integer => 10
+
+  /// Time window (seconds) `maxRestarts` is measured over.
+  class restartWindow -> Integer => 60
 
   // ===== Class-side factories =====
 
@@ -195,18 +206,76 @@ typed Actor subclass: Watcher
   /// Each branch calls its `configureX` as a plain statement rather than
   /// `^self configureX` — a non-local return of a non-Nil self-call, from
   /// a method dispatched as a cast, silently drops the call (filed as
-  /// BT-3370). Falling through to a bare `self` after each branch avoids
+  /// BT-3374). Falling through to a bare `self` after each branch avoids
   /// the pattern entirely.
+  ///
+  /// Bounded by `maxRestarts`/`restartWindow`: `Watcher` is the top of
+  /// this app's tree with nothing above it to restart it, so a
+  /// `configureX` that fails (or a sub-actor that crashes immediately on
+  /// every restart) must not be left to either loop forever or crash
+  /// `Watcher` itself — both are caught and logged, leaving that one
+  /// subsystem down rather than escalating.
   internal childExited: which :: Symbol reason: _reason :: Object -> Watcher =>
     self.shuttingDown
       ifFalse: [
-        which == #alertLog ifTrue: [self configureAlertLog]
-        which == #router ifTrue: [self configureRouter]
-        which == #registry ifTrue: [self configureRegistry]
-        which == #receiver ifTrue: [self configureReceiver]
-        which == #dashboard ifTrue: [self configureDashboard]
+        (self recordRestartAttempt: which)
+          ifTrue: [
+            [self respawn: which]
+              on: Error
+              do: [:e |
+                Logger error: "Watcher: " ++ which printString ++ " failed to restart: " ++ e printString
+              ]
+          ]
+          ifFalse: [
+            Logger
+              error: "Watcher: "
+                ++ which printString
+                ++ " crashed "
+                ++ (Watcher maxRestarts) printString
+                ++ "+ times within "
+                ++ (Watcher restartWindow) printString
+                ++ "s — giving up on it"
+          ]
       ]
     self
+
+  /// Dispatch to the one `configureX` matching `which`. Nested
+  /// `ifTrue:ifFalse:` (rather than a flat sequence of `ifTrue:` checks)
+  /// so once a branch matches, no subsequent condition is evaluated at
+  /// all — a flat sequence was observed to corrupt an earlier matching
+  /// branch's already-completed side effects merely by evaluating a
+  /// *later*, non-matching `ifTrue:` check afterward (filed as BT-3378).
+  internal respawn: which :: Symbol -> Watcher =>
+    which == #alertLog
+      ifTrue: [self configureAlertLog]
+      ifFalse: [
+        which == #router
+          ifTrue: [self configureRouter]
+          ifFalse: [
+            which == #registry
+              ifTrue: [self configureRegistry]
+              ifFalse: [
+                which == #receiver ifTrue: [
+                  self configureReceiver
+                ] ifFalse: [
+                  which == #dashboard ifTrue: [
+                    self configureDashboard
+                  ] ifFalse: [self]
+                ]
+              ]
+          ]
+      ]
+
+  /// Record a restart attempt for `which` and report whether it's still
+  /// within budget (fewer than `maxRestarts` recorded in the last
+  /// `restartWindow` seconds).
+  internal recordRestartAttempt: which :: Symbol -> Boolean =>
+    now := DateTime now
+    recent := (self.restartTimestamps at: which ifAbsent: [
+      #()
+    ]) select: [:t | (now diffSeconds: t) < Watcher restartWindow]
+    self.restartTimestamps := self.restartTimestamps at: which put: (recent add: now)
+    recent size < Watcher maxRestarts
 
   /// Register a single check from a config dictionary. Recognised keys:
   ///   * `#type`      — `#http` | `#tcp` | `#process` (required)

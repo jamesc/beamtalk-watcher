@@ -15,25 +15,43 @@
 /// Monitors are started as children of a `MonitorSupervisor` rather than
 /// via a bare `spawnWith:`, so a crashed Monitor is cleanly torn down and
 /// removable via `terminateChild:` instead of leaking a dead-but-registered
-/// process. The registry — not OTP — is what actually notices a crash and
-/// respawns the check: `MonitorSupervisor startChild` can only spawn with
-/// empty init state (a `DynamicSupervisor`'s `startChild: args` can't pass
-/// per-call args without hitting an arity mismatch — BT-3365), so a plain
-/// OTP auto-restart would come back with `check == nil` and silently never
-/// check anything again. Instead `add:` remembers each check's config in
-/// `configs`, and `spawnMonitorFor:` re-arms `onExit:` on every spawned
-/// Monitor so a crash triggers `monitorExited:reason:`, which
-/// re-spawns and reconfigures a fresh Monitor under the same name.
+/// process. `supervisionPolicy` on `Monitor` stays `#temporary` (the
+/// `Actor` default), so the registry — not OTP — notices a crash and
+/// respawns the check: `add:` remembers each check's config in `configs`,
+/// and `spawnMonitorFor:` re-arms `onExit:` on every spawned Monitor so a
+/// crash triggers `monitorExited:reason:`, which calls `startChild:` with
+/// that same remembered config to bring back a fresh, fully-configured
+/// Monitor under the same name (BT-3365 fixed `DynamicSupervisor`'s
+/// `startChild: args` to correctly pass per-call init args — before that
+/// fix this had to bare-spawn and `configure:` in two steps).
 ///
 /// The `status` method collects per-monitor snapshots as a List of
 /// Dictionaries, each with keys `#name`, `#status`, and `#lastResult`.
+///
+/// Since restart is manual (not OTP-driven), OTP's own `maxRestarts`/
+/// `restartWindow` crash-loop protection never sees these respawns —
+/// `monitorExited:reason:` tracks its own restart timestamps per check
+/// and gives up (logging via `Logger`, dropping the check rather than
+/// looping forever) if `maxRestarts` is exceeded within `restartWindow`.
+/// A `startChild:` failure during respawn is also caught rather than
+/// left to crash the whole registry (and every *other* check it tracks)
+/// over one bad check.
 ///
 /// See SPEC.md §10.
 typed Actor subclass: CheckRegistry
   state: monitors :: Dictionary(Symbol, Monitor) = #{}
   state: configs :: Dictionary(Symbol, Dictionary) = #{}
+  state: restartTimestamps :: Dictionary(Symbol, List(DateTime)) = #{}
   state: router :: EventListener | nil = nil
   state: supervisor :: MonitorSupervisor | nil = nil
+
+  /// Maximum respawn attempts per check within `restartWindow` seconds
+  /// before `monitorExited:reason:` gives up on it. Matches
+  /// `DynamicSupervisor`'s own defaults for familiarity.
+  class maxRestarts -> Integer => 10
+
+  /// Time window (seconds) `maxRestarts` is measured over.
+  class restartWindow -> Integer => 60
 
   // ===== Class-side factory =====
 
@@ -64,27 +82,34 @@ typed Actor subclass: CheckRegistry
   // ===== Monitor management =====
 
   /// Create a new Monitor for the given check, start it, and register it
-  /// under `name`. Returns the spawned Monitor actor.
+  /// under `name`. Returns the spawned Monitor actor. Raises if
+  /// `supervisor startChild:` fails — this is the initial, caller-visible
+  /// add, so it fails fast rather than swallowing the error (contrast
+  /// `monitorExited:reason:`, the crash-recovery path, which doesn't).
   add: check :: HealthCheck name: name :: Symbol interval: secs :: Integer threshold: n :: Integer -> Monitor =>
     self.configs := self.configs at: name put: #{
       #check => check,
       #interval => secs,
       #threshold => n
     }
+    (self.restartTimestamps includesKey: name) ifTrue: [
+      self.restartTimestamps := self.restartTimestamps removeKey: name
+    ]
     self spawnMonitorFor: name
 
   /// Start (or restart) the Monitor for `name` from its remembered config:
-  /// spawns a bare child under `supervisor`, configures and starts it,
-  /// registers it under `name`, and arms `onExit:` so a future crash
-  /// triggers `monitorExited:reason:`.
+  /// starts a fully-configured child under `supervisor`, registers it
+  /// under `name`, and arms `onExit:` so a future crash triggers
+  /// `monitorExited:reason:`. Raises if `startChild:` fails.
   internal spawnMonitorFor: name :: Symbol -> Monitor =>
     cfg := self.configs at: name
-    monitor := (self.supervisor startChild) unwrap
-    monitor
-      configure: (cfg at: #check)
-      interval: (cfg at: #interval)
-      threshold: (cfg at: #threshold)
-      listener: self.router
+    monitor := (self.supervisor
+      startChild: #{
+        #check => (cfg at: #check),
+        #interval => (cfg at: #interval),
+        #threshold => (cfg at: #threshold),
+        #listener => self.router
+      }) unwrap
     self.monitors := self.monitors at: name put: monitor
     monitor onExit: [:reason | self monitorExited: name reason: reason!]
     monitor start
@@ -94,9 +119,55 @@ typed Actor subclass: CheckRegistry
   /// process terminates. Re-spawns the check under the same name unless
   /// `remove:` already dropped it (a graceful `terminateChild:` also fires
   /// `onExit:`, so this check is what keeps removal from resurrecting it).
+  ///
+  /// Bounded by `maxRestarts`/`restartWindow`: since this restart is
+  /// manual rather than OTP-driven, `MonitorSupervisor`'s own crash-loop
+  /// protection never sees it, so a check that crashes immediately on
+  /// every restart would otherwise respawn forever. A `spawnMonitorFor:`
+  /// failure is caught here rather than left to crash this whole registry
+  /// (and every other check it tracks) over one bad check.
   internal monitorExited: name :: Symbol reason: _reason :: Object -> CheckRegistry =>
-    (self.monitors includesKey: name) ifTrue: [self spawnMonitorFor: name]
+    (self.monitors includesKey: name)
+      ifTrue: [
+        (self recordRestartAttempt: name)
+          ifTrue: [
+            [self spawnMonitorFor: name]
+              on: Error
+              do: [:e |
+                Logger
+                  error: "CheckRegistry: Monitor for "
+                    ++ name printString
+                    ++ " failed to restart, dropping it: "
+                    ++ e printString
+                self.monitors := self.monitors removeKey: name
+                self.configs := self.configs removeKey: name
+              ]
+          ]
+          ifFalse: [
+            Logger
+              error: "CheckRegistry: Monitor for "
+                ++ name printString
+                ++ " crashed "
+                ++ (CheckRegistry maxRestarts) printString
+                ++ "+ times within "
+                ++ (CheckRegistry restartWindow) printString
+                ++ "s — giving up; re-add: the check to retry"
+            self.monitors := self.monitors removeKey: name
+            self.configs := self.configs removeKey: name
+          ]
+      ]
     self
+
+  /// Record a restart attempt for `name` and report whether it's still
+  /// within budget (fewer than `maxRestarts` recorded in the last
+  /// `restartWindow` seconds).
+  internal recordRestartAttempt: name :: Symbol -> Boolean =>
+    now := DateTime now
+    recent := (self.restartTimestamps at: name ifAbsent: [
+      #()
+    ]) select: [:t | (now diffSeconds: t) < CheckRegistry restartWindow]
+    self.restartTimestamps := self.restartTimestamps at: name put: (recent add: now)
+    recent size < CheckRegistry maxRestarts
 
   /// Stop and unregister the monitor identified by `name`.
   /// Raises if `name` is not in the registry.
@@ -104,6 +175,9 @@ typed Actor subclass: CheckRegistry
     monitor := self.monitors at: name
     self.monitors := self.monitors removeKey: name
     self.configs := self.configs removeKey: name
+    (self.restartTimestamps includesKey: name) ifTrue: [
+      self.restartTimestamps := self.restartTimestamps removeKey: name
+    ]
     monitor stopMonitoring
     (self.supervisor terminateChild: monitor) unwrap
     self
@@ -122,6 +196,7 @@ typed Actor subclass: CheckRegistry
       ]
     self.monitors := #{}
     self.configs := #{}
+    self.restartTimestamps := #{}
     self
 
   // ===== Query interface =====
