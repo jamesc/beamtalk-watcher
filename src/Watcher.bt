@@ -38,6 +38,45 @@
 /// ephemeral port (useful in tests). Resolved ports are then available via
 /// `w dashboard port` and `w receiver port`.
 ///
+/// ## Supervision
+///
+/// `AlertLog`, `NotificationRouter`, `CheckRegistry`, `WebhookReceiver`,
+/// and `Dashboard` are each watched via `Actor>>onExit:` rather than left
+/// as bare, unmonitored `spawn`s — a crash in any of them is noticed and
+/// the subsystem is respawned and reconfigured (`configureAlertLog`,
+/// `configureRouter`, `configureRegistry`, `configureReceiver`,
+/// `configureDashboard`, dispatched from `childExited:reason:`).
+///
+/// This is deliberately *not* a real OTP `Supervisor`/`DynamicSupervisor`:
+/// a `Supervisor`'s children are a single set shared by every instance of
+/// the supervisor class (`class supervise` always returns the same
+/// running instance) — fine for a single, static tree, but wrong here,
+/// since a running node can have several independent `Watcher`s at once
+/// (every test in `WatcherTest` does), each needing its own private set
+/// of sub-actors. Routing them through a shared `Supervisor` was tried
+/// and confirmed broken: two `Watcher`s ended up silently sharing one
+/// `Dashboard`/`AlertLog`/`WebhookReceiver`. So each `Watcher` instead
+/// does its own plain, per-instance `spawn` + `onExit:` — the same
+/// recipe `CheckRegistry` uses for its `Monitor`s, just without a
+/// `DynamicSupervisor` underneath (not needed here: these are fixed,
+/// one-of-each children, not a dynamically-sized pool).
+///
+/// Reconfiguring restores what `Watcher` itself knows how to rebuild from
+/// `self.config` (ports, registry/AlertLog wiring, the one config-derived
+/// webhook channel) — it does not restore state that only ever lived
+/// inside the crashed actor. Two known gaps from that:
+///   * Channels added to the router at runtime via `router addChannel:`
+///     (rather than `#webhookUrl`) are lost on a router restart.
+///   * If `CheckRegistry` itself crashes (as opposed to one of the
+///     `Monitor`s it manages — that case *is* handled, see
+///     `CheckRegistry`), every `Monitor` it had already spawned is
+///     orphaned: they keep running under `MonitorSupervisor`, invisible
+///     to the fresh, empty `CheckRegistry`, and `configureRegistry`
+///     replaying `#checks` spawns brand-new duplicates for the same
+///     names. Recovering cleanly from that would need `CheckRegistry`'s
+///     own state to survive its crash, which is a bigger change than
+///     watching it for crashes.
+///
 /// See SPEC.md §12.
 typed Actor subclass: Watcher
   state: registry :: CheckRegistry | nil = nil
@@ -46,6 +85,10 @@ typed Actor subclass: Watcher
   state: receiver :: WebhookReceiver | nil = nil
   state: dashboard :: Dashboard | nil = nil
   state: config :: Dictionary = #{}
+  // Set at the start of `shutdown` so `childExited:reason:` doesn't treat
+  // the deliberate teardown of alertLog/router (plain `Actor>>stop`, which
+  // also fires `onExit:`) as a crash to recover from.
+  state: shuttingDown :: Boolean = false
 
   // ===== Class-side factories =====
 
@@ -75,32 +118,94 @@ typed Actor subclass: Watcher
   /// Bring up every sub-actor and register the configured checks. Called
   /// once by `startWith:` after the Watcher itself has been spawned.
   /// Returns self so the caller can hold a reference to the live Watcher.
-  bringUp: aConfig :: Dictionary -> Watcher =>
-    log := AlertLog spawn
-    rtr := NotificationRouter spawn
-    reg := CheckRegistry start: rtr
-    self.alertLog := log
-    self.router := rtr
-    self.registry := reg
+  bringUp: _aConfig :: Dictionary -> Watcher =>
+    self configureAlertLog
+    self configureRouter
+    self configureRegistry
+    self configureReceiver
+    self configureDashboard
+    self
 
-    webhookUrl := aConfig at: #webhookUrl ifAbsent: [nil]
-    webhookUrl isNil
-      ifFalse: [
-        channel := WebhookChannel url: webhookUrl
-        rtr addChannel: channel
-      ]
+  /// (Re)spawn and configure the AlertLog and arm crash detection on it.
+  /// Safe to call again after a crash — see `childExited:reason:`.
+  internal configureAlertLog -> Watcher =>
+    self.alertLog := AlertLog spawn
+    self.alertLog onExit: [:reason |
+      self childExited: #alertLog reason: reason!
+    ]
+    self
 
-    receiverPort :: Integer := aConfig at: #receiverPort ifAbsent: [8081]
-    self.receiver := WebhookReceiver start: receiverPort alertLog: log
+  /// (Re)spawn and configure the NotificationRouter: re-adds the
+  /// config-derived webhook channel (if any) and arms crash detection.
+  internal configureRouter -> Watcher =>
+    self.router := NotificationRouter spawn
+    webhookUrl := self.config at: #webhookUrl ifAbsent: [nil]
+    webhookUrl isNil ifFalse: [
+      self.router addChannel: (WebhookChannel url: webhookUrl)
+    ]
+    self.router onExit: [:reason | self childExited: #router reason: reason!]
+    self
 
-    dashPort :: Integer := aConfig at: #dashboardPort ifAbsent: [8080]
-    self.dashboard := Dashboard
-      start: dashPort
-      registry: reg
-      alertLog: log
-
-    checks :: List(Dictionary) := aConfig at: #checks ifAbsent: [#()]
+  /// (Re)spawn and configure the CheckRegistry: wires it to the router
+  /// and a `MonitorSupervisor`, replays the configured checks, and arms
+  /// crash detection.
+  internal configureRegistry -> Watcher =>
+    self.registry := CheckRegistry spawn
+    monitorSupervisor := (MonitorSupervisor supervise) unwrap
+    self.registry configure: self.router supervisor: monitorSupervisor
+    checks :: List(Dictionary) := self.config at: #checks ifAbsent: [#()]
     checks do: [:checkConfig | self addCheckFromConfig: checkConfig]
+    self.registry onExit: [:reason |
+      self childExited: #registry reason: reason!
+    ]
+    self
+
+  /// (Re)spawn and configure the WebhookReceiver: sets its port/AlertLog,
+  /// (re)starts its HTTP server, and arms crash detection.
+  internal configureReceiver -> Watcher =>
+    self.receiver := WebhookReceiver spawn
+    receiverPort :: Integer := self.config at: #receiverPort ifAbsent: [8081]
+    self.receiver configure: receiverPort alertLog: self.alertLog
+    self.receiver startServer: self.receiver buildRouter
+    self.receiver onExit: [:reason |
+      self childExited: #receiver reason: reason!
+    ]
+    self
+
+  /// (Re)spawn and configure the Dashboard: sets its port/registry/
+  /// AlertLog, (re)starts its HTTP server, and arms crash detection.
+  internal configureDashboard -> Watcher =>
+    self.dashboard := Dashboard spawn
+    dashPort :: Integer := self.config at: #dashboardPort ifAbsent: [8080]
+    self.dashboard
+      configure: dashPort
+      registry: self.registry
+      alertLog: self.alertLog
+    self.dashboard startServer: self.dashboard buildRouter
+    self.dashboard onExit: [:reason |
+      self childExited: #dashboard reason: reason!
+    ]
+    self
+
+  /// Called (async, from an `onExit:` watcher process) when one of our
+  /// sub-actors terminates. Respawns and reconfigures it under the same
+  /// role, unless we're mid-`shutdown` (in which case this exit was us,
+  /// not a crash — do nothing).
+  ///
+  /// Each branch calls its `configureX` as a plain statement rather than
+  /// `^self configureX` — a non-local return of a non-Nil self-call, from
+  /// a method dispatched as a cast, silently drops the call (filed as
+  /// BT-3370). Falling through to a bare `self` after each branch avoids
+  /// the pattern entirely.
+  internal childExited: which :: Symbol reason: _reason :: Object -> Watcher =>
+    self.shuttingDown
+      ifFalse: [
+        which == #alertLog ifTrue: [self configureAlertLog]
+        which == #router ifTrue: [self configureRouter]
+        which == #registry ifTrue: [self configureRegistry]
+        which == #receiver ifTrue: [self configureReceiver]
+        which == #dashboard ifTrue: [self configureDashboard]
+      ]
     self
 
   /// Register a single check from a config dictionary. Recognised keys:
@@ -164,11 +269,31 @@ typed Actor subclass: Watcher
 
   // ===== Lifecycle =====
 
-  /// Stop the dashboard and receiver HTTP servers and every Monitor that
-  /// the registry has spawned. Safe to call multiple times — each
-  /// sub-actor's shutdown is itself idempotent.
+  /// Stop every sub-actor this Watcher owns. `dashboard`/`receiver`/
+  /// `registry` each get their own instance `shutdown` first (HTTP server
+  /// / Monitor cleanup — also reachable via `terminate:` if something
+  /// else stops one of them directly) before the actor itself is stopped;
+  /// `router`/`alertLog` hold no such resources so a plain `stop`
+  /// suffices. `shuttingDown` is set first so `childExited:reason:`
+  /// doesn't try to resurrect these as if they'd crashed. Safe to call
+  /// multiple times.
   shutdown -> Watcher =>
-    self.dashboard isNil ifFalse: [self.dashboard shutdown]
-    self.receiver isNil ifFalse: [self.receiver shutdown]
-    self.registry isNil ifFalse: [self.registry shutdown]
+    self.shuttingDown := true
+    self.dashboard isNil
+      ifFalse: [
+        self.dashboard shutdown
+        self.dashboard stop
+      ]
+    self.receiver isNil
+      ifFalse: [
+        self.receiver shutdown
+        self.receiver stop
+      ]
+    self.registry isNil
+      ifFalse: [
+        self.registry shutdown
+        self.registry stop
+      ]
+    self.router isNil ifFalse: [self.router stop]
+    self.alertLog isNil ifFalse: [self.alertLog stop]
     self

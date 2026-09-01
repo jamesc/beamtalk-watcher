@@ -17,24 +17,38 @@
 /// value via the `port` accessor (e.g. in tests).
 typed Actor subclass: WebhookReceiver
   state: server :: HTTPServer | nil = nil
-  state: alertLog :: AlertLog
+  state: alertLog :: AlertLog | nil = nil
   state: port :: Integer = 0
 
   /// Spawn a WebhookReceiver bound to `aPort` and start its HTTP server.
   ///
   /// Returns the spawned receiver actor. Use `aPort = 0` for an ephemeral
   /// port; the resolved port is then available via `receiver port`.
+  /// `Watcher` goes through `configure:alertLog:` on a bare spawn instead
+  /// (so it can rewire the same instance after a crash — see `Watcher
+  /// configureReceiver`); this factory is for direct/test use.
   class start: aPort :: Integer alertLog: anAlertLog :: AlertLog -> WebhookReceiver =>
     receiver := self spawnWith: #{#port => aPort, #alertLog => anAlertLog}
-    router := HTTPRouter
+    receiver startServer: receiver buildRouter
+    receiver
+
+  /// Fill in a bare (freshly `spawn`ed) WebhookReceiver's config. Call
+  /// once, before `startServer:`. See `Watcher configureReceiver`.
+  configure: aPort :: Integer alertLog: anAlertLog :: AlertLog -> WebhookReceiver =>
+    self.port := aPort
+    self.alertLog := anAlertLog
+    self
+
+  /// Build this receiver's route table. Split out from `startServer:` so
+  /// both the direct factory and the supervised-startup path can share it.
+  buildRouter -> HTTPRouter =>
+    HTTPRouter
       build: [:r |
-        r post: "/webhook" handler: [:req | receiver handleWebhook: req]
+        r post: "/webhook" handler: [:req | self handleWebhook: req]
         r get: "/health" handler: [:req |
           HTTPResponse new: #{#status => 200, #body => "\{""status"":""ok""}"}
         ]
       ]
-    receiver startServer: router
-    receiver
 
   /// Handle one webhook POST. Parses the request body as JSON and stores
   /// the resulting `Alert` in the configured AlertLog. Returns the
@@ -72,3 +86,9 @@ typed Actor subclass: WebhookReceiver
     self.server isNil ifFalse: [self.server stop]
     self.server := nil
     self
+
+  /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — stop our
+  /// HTTP server the same way an explicit `shutdown` would.
+  terminate: _reason :: Object -> Nil =>
+    self shutdown
+    nil

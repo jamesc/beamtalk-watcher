@@ -16,30 +16,45 @@
 /// See SPEC.md section 11.
 typed Actor subclass: Dashboard
   state: server :: HTTPServer | nil = nil
-  state: registry :: CheckRegistry
-  state: alertLog :: AlertLog
+  state: registry :: CheckRegistry | nil = nil
+  state: alertLog :: AlertLog | nil = nil
   state: port :: Integer = 0
 
   /// Spawn a Dashboard on `aPort`, wired to the given registry and alert log.
-  /// Use port 0 for ephemeral OS-assigned port (for tests).
+  /// Use port 0 for ephemeral OS-assigned port (for tests). `Watcher` goes
+  /// through `configure:registry:alertLog:` on a bare spawn instead (so it
+  /// can rewire the same instance after a crash — see `Watcher
+  /// configureDashboard`); this factory is for direct/test use.
   class start: aPort :: Integer registry: reg :: CheckRegistry alertLog: log :: AlertLog -> Dashboard =>
     dash := self spawnWith: #{
       #port => aPort,
       #registry => reg,
       #alertLog => log
     }
-    router := HTTPRouter
-      build: [:r |
-        r get: "/" handler: [:req | dash renderIndex: req];
-          get: "/monitors" handler: [:req | dash renderMonitors: req];
-          get: "/alerts" handler: [:req | dash renderAlerts: req];
-          get: "/api/status" handler: [:req | dash apiStatus: req];
-          get: "/api/alerts" handler: [:req | dash apiAlerts: req];
-          get: "/api/monitors/:name" handler: [:req | dash apiMonitor: req];
-          get: "/static/*path" handler: [:req | dash serveStatic: req]
-      ]
-    dash startServer: router
+    dash startServer: dash buildRouter
     dash
+
+  /// Fill in a bare (freshly `spawn`ed) Dashboard's config. Call once,
+  /// before `startServer:`. See `Watcher configureDashboard`.
+  configure: aPort :: Integer registry: reg :: CheckRegistry alertLog: log :: AlertLog -> Dashboard =>
+    self.port := aPort
+    self.registry := reg
+    self.alertLog := log
+    self
+
+  /// Build this dashboard's route table. Split out from `startServer:` so
+  /// both the direct factory and the supervised-startup path can share it.
+  buildRouter -> HTTPRouter =>
+    HTTPRouter
+      build: [:r |
+        r get: "/" handler: [:req | self renderIndex: req];
+          get: "/monitors" handler: [:req | self renderMonitors: req];
+          get: "/alerts" handler: [:req | self renderAlerts: req];
+          get: "/api/status" handler: [:req | self apiStatus: req];
+          get: "/api/alerts" handler: [:req | self apiAlerts: req];
+          get: "/api/monitors/:name" handler: [:req | self apiMonitor: req];
+          get: "/static/*path" handler: [:req | self serveStatic: req]
+      ]
 
   // ===== HTML page handlers =====
 
@@ -292,3 +307,9 @@ typed Actor subclass: Dashboard
     self.server isNil ifFalse: [self.server stop]
     self.server := nil
     self
+
+  /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — stop our
+  /// HTTP server the same way an explicit `shutdown` would.
+  terminate: _reason :: Object -> Nil =>
+    self shutdown
+    nil

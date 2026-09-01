@@ -37,12 +37,29 @@ typed Actor subclass: CheckRegistry
 
   // ===== Class-side factory =====
 
-  /// Spawn a new CheckRegistry wired to the given notification router,
-  /// backed by a fresh `MonitorSupervisor` that every Monitor is started
-  /// under. The router is passed as the listener to each spawned Monitor.
+  /// Spawn a new, unsupervised CheckRegistry wired to the given
+  /// notification router, backed by a fresh `MonitorSupervisor` that
+  /// every Monitor is started under. `Watcher` goes through `configure:`
+  /// on a bare spawn instead (so it can rewire the same instance after a
+  /// crash — see `Watcher configureRegistry`); this factory is for
+  /// direct/test use.
   class start: aRouter :: EventListener -> CheckRegistry =>
     sup := (MonitorSupervisor supervise) unwrap
     self spawnWith: #{#router => aRouter, #supervisor => sup}
+
+  /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — tear down
+  /// our Monitors the same way an explicit `shutdown` would, so a Watcher
+  /// shutdown doesn't orphan them under `MonitorSupervisor`.
+  terminate: _reason :: Object -> Nil =>
+    self shutdown
+    nil
+
+  /// Fill in a bare (supervisor-spawned) CheckRegistry's config. Call
+  /// once, before `add:`. See `Watcher configureRegistry`.
+  configure: aRouter :: EventListener supervisor: sup :: MonitorSupervisor -> CheckRegistry =>
+    self.router := aRouter
+    self.supervisor := sup
+    self
 
   // ===== Monitor management =====
 

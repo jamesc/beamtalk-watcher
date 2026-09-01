@@ -11,6 +11,10 @@
 ///     registry and they show up via `registry names`.
 ///   * `defaultConfig` exposes the documented keys.
 ///   * `shutdown` stops the HTTP servers cleanly.
+///   * a crashed sub-actor (dashboard, receiver) is noticed and respawned
+///     under the same role, still correctly wired — see `Watcher`'s
+///     Supervision doc comment.
+///   * `shutdown` doesn't get mistaken for a crash and resurrect anything.
 TestCase subclass: WatcherTest
   field: watcher :: Watcher | nil = nil
 
@@ -170,3 +174,50 @@ TestCase subclass: WatcherTest
   testDefaultConfigEmptyChecks =>
     cfg := Watcher defaultConfig
     self assert: (cfg at: #checks) size equals: 0
+
+  // ===== Crash recovery =====
+  //
+  // Watcher watches alertLog/router/registry/receiver/dashboard via
+  // onExit: and respawns+reconfigures whichever one crashes (see the
+  // class doc comment's Supervision section). These pin down that the
+  // respawned actor is a genuinely different, live instance still wired
+  // to the rest of the app, not just that *something* survives.
+  testDashboardRespawnsAfterCrash =>
+    original := self.watcher dashboard
+    original kill
+    (Erlang timer) sleep: 500
+    respawned := self.watcher dashboard
+    self deny: respawned == original
+    self assert: respawned isAlive
+
+  testRespawnedDashboardStillServesApiStatus =>
+    self.watcher dashboard kill
+    (Erlang timer) sleep: 500
+    url := "http://localhost:" ++ self.watcher dashboard port printString ++ "/api/status"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+
+  testReceiverRespawnsAfterCrash =>
+    original := self.watcher receiver
+    original kill
+    (Erlang timer) sleep: 500
+    respawned := self.watcher receiver
+    self deny: respawned == original
+    self assert: respawned isAlive
+
+  testRespawnedReceiverStillServesHealth =>
+    self.watcher receiver kill
+    (Erlang timer) sleep: 500
+    url := "http://localhost:" ++ self.watcher receiver port printString ++ "/health"
+    resp := (HTTPClient get: url) unwrap
+    self assert: resp status equals: 200
+
+  testShutdownDoesNotTriggerRespawn =>
+    dashboardBeforeShutdown := self.watcher dashboard
+    self.watcher shutdown
+    (Erlang timer) sleep: 500
+    // If shutdown were mistaken for a crash, `dashboard` would now point
+    // at a freshly-respawned (but never `startServer:`-called through
+    // tearDown-safe means) instance instead of staying put.
+    self assert: self.watcher dashboard == dashboardBeforeShutdown
+    self deny: self.watcher dashboard isAlive
