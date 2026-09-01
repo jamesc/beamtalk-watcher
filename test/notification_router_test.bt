@@ -125,3 +125,80 @@ TestCase subclass: NotificationRouterTest
     router handleEvent: e
     self assert: a count equals: 0
     self assert: b count equals: 1
+
+  // ===== Maintenance windows (silence/unsilence) =====
+  testIsSilencedFalseByDefault =>
+    router := NotificationRouter spawn
+    self deny: (router isSilenced: "http-api")
+
+  testSilenceSuppressesDelivery =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 3600
+    e := self makeEvent: "http-api" type: #alert
+    self deny: (router handleEvent: e)
+    self assert: ch count equals: 0
+
+  testSilenceOnlyAffectsNamedCheck =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 3600
+    other := self makeEvent: "http-db" type: #alert
+    self assert: (router handleEvent: other)
+    self assert: ch count equals: 1
+
+  testSilencedEventDoesNotConsumeDedupSlot =>
+    // A silenced event is dropped before dedup even runs — it shouldn't
+    // land in recentEvents, so an identical event delivered right after
+    // unsilencing isn't itself treated as a duplicate.
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 3600
+    silenced := self makeEvent: "http-api" type: #alert
+    router handleEvent: silenced
+    router unsilence: "http-api"
+    afterUnsilence := self makeEvent: "http-api" type: #alert
+    self assert: (router handleEvent: afterUnsilence)
+    self assert: ch count equals: 1
+
+  testUnsilenceRestoresDelivery =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 3600
+    router unsilence: "http-api"
+    e := self makeEvent: "http-api" type: #alert
+    self assert: (router handleEvent: e)
+    self assert: ch count equals: 1
+
+  testUnsilenceOnNeverSilencedCheckIsSafe =>
+    router := NotificationRouter spawn
+    result := [
+      router unsilence: "never-silenced"
+      #did_not_raise
+    ] on: Error do: [:e | #raised]
+    self assert: result equals: #did_not_raise
+
+  testResilencingReplacesRatherThanStacks =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 3600
+    router silence: "http-api" for: 1
+    // Immediately after re-silencing for 1 second, still silenced.
+    self assert: (router isSilenced: "http-api")
+    self assert: ch count equals: 0
+
+  testSilenceExpiresAfterWindow =>
+    router := NotificationRouter spawn
+    ch := RecordingChannel spawn
+    router addChannel: ch
+    router silence: "http-api" for: 0
+    // A 0-second window is already in the past the moment it's checked.
+    self deny: (router isSilenced: "http-api")
+    e := self makeEvent: "http-api" type: #alert
+    self assert: (router handleEvent: e)
+    self assert: ch count equals: 1

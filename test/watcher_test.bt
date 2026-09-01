@@ -25,6 +25,12 @@ TestCase subclass: WatcherTest
       #webhookUrl => nil,
       #checks => #()
     }
+    // Explicit trailing `self` — TestCase is a Value subclass and threads
+    // setUp's return value to the test method; ending on a bare
+    // `self.field := ...` assignment instead works only by accident (its
+    // value happens to be usable) and silently drops every field the
+    // moment anything else follows it (see BT-3391).
+    self
 
   tearDown =>
     self.watcher isNil ifFalse: [self.watcher shutdown]
@@ -117,6 +123,34 @@ TestCase subclass: WatcherTest
     monitor := self.watcher registry monitor: #defaults
     self assert: monitor interval equals: 30
     self assert: monitor threshold equals: 3
+
+  // ===== Maintenance windows (silence/unsilence passthrough) =====
+  //
+  // `Watcher>>silence:for:`/`unsilence:` bridge a `CheckRegistry` Symbol
+  // to the `NotificationRouter`'s own check-name-string keying — these
+  // pin down that the bridge is wired correctly end to end, not just
+  // that `NotificationRouter` itself works (see NotificationRouterTest
+  // for that).
+  testSilenceSuppressesNotificationsForNamedCheck =>
+    self.watcher addCheckFromConfig: #{
+      #type => #process,
+      #name => #worker,
+      #process => #kernel_sup
+    }
+    self.watcher silence: #worker for: 3600
+    monitor := self.watcher registry monitor: #worker
+    self assert: (self.watcher router isSilenced: monitor checkName)
+
+  testUnsilenceRestoresNotificationsForNamedCheck =>
+    self.watcher addCheckFromConfig: #{
+      #type => #process,
+      #name => #worker,
+      #process => #kernel_sup
+    }
+    self.watcher silence: #worker for: 3600
+    self.watcher unsilence: #worker
+    monitor := self.watcher registry monitor: #worker
+    self deny: (self.watcher router isSilenced: monitor checkName)
 
   testUnknownCheckTypeRaises =>
     result := [

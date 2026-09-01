@@ -15,6 +15,10 @@ TestCase subclass: WebhookReceiverTest
     log := AlertLog spawn
     self.log := log
     self.receiver := WebhookReceiver start: 0 alertLog: log
+    // Explicit trailing `self` — see BT-3391 (TestCase is a Value
+    // subclass; a bare `self.field := ...` as the last statement only
+    // works by accident and breaks the moment anything follows it).
+    self
 
   tearDown =>
     self.receiver isNil ifFalse: [self.receiver shutdown]

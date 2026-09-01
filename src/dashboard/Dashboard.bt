@@ -11,6 +11,12 @@
 ///   * `GET /api/status`        — JSON status of all monitors
 ///   * `GET /api/alerts`        — JSON alert list
 ///   * `GET /api/monitors/:name` — JSON detail for a single monitor
+///   * `POST /api/monitors/:name/silence` — Suppress outbound alert
+///     delivery for `:name` (maintenance window). Body (optional):
+///     `{"seconds": N}`, default 3600 (1 hour). The Monitor keeps
+///     checking and its status stays visible everywhere else — see
+///     `NotificationRouter`'s class doc comment.
+///   * `POST /api/monitors/:name/unsilence` — Clear an active silence early.
 ///   * `GET /static/*path`      — Static file serving (CSS, JS)
 ///
 /// See SPEC.md section 11.
@@ -19,6 +25,7 @@ typed Actor subclass: Dashboard
   state: registry :: CheckRegistry | nil = nil
   state: alertLog :: AlertLog | nil = nil
   state: healthReporter :: HealthReporter | nil = nil
+  state: router :: NotificationRouter | nil = nil
   state: port :: Integer = 0
 
   /// Spawn a Dashboard on `aPort`, wired to the given registry and alert log.
@@ -51,6 +58,13 @@ typed Actor subclass: Dashboard
     self.healthReporter := reporter
     self
 
+  /// Attach the `NotificationRouter` that powers the silence/unsilence
+  /// routes. Separate from `configure:registry:alertLog:` for the same
+  /// reason as `attachHealthReporter:`.
+  attachRouter: aRouter :: NotificationRouter -> Dashboard =>
+    self.router := aRouter
+    self
+
   /// Build this dashboard's route table. Split out from `startServer:` so
   /// both the direct factory and the supervised-startup path can share it.
   buildRouter -> HTTPRouter =>
@@ -63,6 +77,12 @@ typed Actor subclass: Dashboard
           get: "/api/health" handler: [:req | self apiHealth: req];
           get: "/api/alerts" handler: [:req | self apiAlerts: req];
           get: "/api/monitors/:name" handler: [:req | self apiMonitor: req];
+          post: "/api/monitors/:name/silence" handler: [:req |
+            self silenceMonitor: req
+          ];
+          post: "/api/monitors/:name/unsilence" handler: [:req |
+            self unsilenceMonitor: req
+          ];
           get: "/static/*path" handler: [:req | self serveStatic: req]
       ]
 
@@ -280,6 +300,66 @@ typed Actor subclass: Dashboard
         #headers => #(#("content-type", "application/json")),
         #body => Json generate: data
       }
+
+  /// POST /api/monitors/:name/silence — suppress outbound alert delivery
+  /// for `:name` for `{"seconds": N}` seconds (body optional, default
+  /// 3600). 404 if `:name` isn't a registered check. See
+  /// `NotificationRouter`'s class doc comment for what silencing does
+  /// and doesn't affect.
+  silenceMonitor: req :: HTTPRequest -> HTTPResponse =>
+    name := req param: "name"
+    nameSymbol := name asAtom
+    (self.registry names includes: nameSymbol)
+      ifFalse: [
+        ^HTTPResponse
+          new: #{
+            #status => 404,
+            #headers => #(#("content-type", "application/json")),
+            #body => "\{""error"":""monitor not found""}"
+          }
+      ]
+    monitor := self.registry monitor: nameSymbol
+    seconds := self silenceSecondsFrom: req body
+    self.router silence: monitor checkName for: seconds
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: #{"silenced" => true, "seconds" => seconds}
+      }
+
+  /// POST /api/monitors/:name/unsilence — clear an active silence early
+  /// for `:name`. 404 if `:name` isn't a registered check. Safe to call
+  /// when `:name` isn't currently silenced.
+  unsilenceMonitor: req :: HTTPRequest -> HTTPResponse =>
+    name := req param: "name"
+    nameSymbol := name asAtom
+    (self.registry names includes: nameSymbol)
+      ifFalse: [
+        ^HTTPResponse
+          new: #{
+            #status => 404,
+            #headers => #(#("content-type", "application/json")),
+            #body => "\{""error"":""monitor not found""}"
+          }
+      ]
+    monitor := self.registry monitor: nameSymbol
+    self.router unsilence: monitor checkName
+    HTTPResponse
+      new: #{
+        #status => 200,
+        #headers => #(#("content-type", "application/json")),
+        #body => Json generate: #{"silenced" => false}
+      }
+
+  /// Parse `{"seconds": N}` from a silence request body, defaulting to
+  /// 3600 (1 hour) when the body is empty, isn't valid JSON, or omits
+  /// `"seconds"`.
+  internal silenceSecondsFrom: body :: String -> Integer =>
+    parsed :: Result(Dictionary) := Json parse: body
+    parsed ifOk: [:data |
+      data at: "seconds" ifAbsent: [3600]
+    ] ifError: [:err | 3600]
 
   // ===== Static file serving =====
 

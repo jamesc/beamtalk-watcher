@@ -203,6 +203,7 @@ typed Actor subclass: Watcher
       registry: self.registry
       alertLog: self.alertLog
     self.dashboard attachHealthReporter: self
+    self.dashboard attachRouter: self.router
     self.dashboard startServer: self.dashboard buildRouter
     self.dashboard onExit: [:reason |
       self childExited: #dashboard reason: reason!
@@ -360,6 +361,26 @@ typed Actor subclass: Watcher
 
   /// The configuration dictionary supplied to `startWith:`.
   config -> Dictionary => self.config
+
+  // ===== Maintenance windows =====
+
+  /// Suppress outbound alert delivery for the check registered under
+  /// `name` for `seconds` seconds — the underlying Monitor keeps
+  /// checking and its real status stays visible everywhere except
+  /// outbound notifications. See `NotificationRouter`'s class doc
+  /// comment. Bridges `name` (a `CheckRegistry` Symbol) to the
+  /// `HealthCheck`'s own name string `NotificationRouter` actually keys
+  /// on, since those are two different identifiers for the same check.
+  silence: name :: Symbol for: seconds :: Integer -> Watcher =>
+    monitor := self.registry monitor: name
+    self.router silence: monitor checkName for: seconds
+    self
+
+  /// Clear an active silence early for the check registered under `name`.
+  unsilence: name :: Symbol -> Watcher =>
+    monitor := self.registry monitor: name
+    self.router unsilence: monitor checkName
+    self
 
   // ===== HealthReporter protocol =====
 

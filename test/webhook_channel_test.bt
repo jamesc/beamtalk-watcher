@@ -17,6 +17,10 @@ TestCase subclass: WebhookChannelTest
   setUp =>
     ctr := RequestCounter spawn
     self.counter := ctr
+    // Explicit trailing `self` — see BT-3391 (TestCase is a Value
+    // subclass; a bare `self.field := ...` as the last statement only
+    // works by accident and breaks the moment anything follows it).
+    self
 
   tearDown =>
     self.srv isNil ifFalse: [self.srv stop]

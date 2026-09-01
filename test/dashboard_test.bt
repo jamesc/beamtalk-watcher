@@ -10,6 +10,7 @@ TestCase subclass: DashboardTest
   field: log :: AlertLog | nil = nil
   field: registry :: CheckRegistry | nil = nil
   field: router :: RecordingListener | nil = nil
+  field: notificationRouter :: NotificationRouter | nil = nil
   field: dashboard :: Dashboard | nil = nil
   field: monitor :: Monitor | nil = nil
 
@@ -40,10 +41,26 @@ TestCase subclass: DashboardTest
           "previousStatus" => "ok",
           "timestamp" => "2026-05-03T10:00:00Z"
         })
-    self.dashboard := Dashboard
-      start: 0
+    notifRouter := NotificationRouter spawn
+    self.notificationRouter := notifRouter
+    // Attach the router BEFORE buildRouter:/startServer: (mirroring
+    // Watcher>>configureDashboard) — route handlers close over Dashboard
+    // state as of when the route table is built, so attaching after
+    // `Dashboard start:registry:alertLog:` (which builds routes and
+    // starts the server internally) would silently never take effect
+    // for the silence/unsilence handlers (filed as BT-3390).
+    dash := Dashboard spawn
+    dash
+      configure: 0
       registry: reg
       alertLog: log
+    dash attachRouter: notifRouter
+    dash startServer: dash buildRouter
+    self.dashboard := dash
+    // Explicit trailing `self` — see BT-3391 (TestCase is a Value
+    // subclass; a bare `self.field := ...` as the last statement only
+    // works by accident and breaks the moment anything follows it).
+    self
 
   tearDown =>
     self.dashboard isNil ifFalse: [self.dashboard shutdown]
@@ -52,6 +69,7 @@ TestCase subclass: DashboardTest
     self.registry := nil
     self.log := nil
     self.router := nil
+    self.notificationRouter := nil
     self.monitor := nil
 
   /// Build the base URL of the running dashboard.
@@ -182,4 +200,43 @@ TestCase subclass: DashboardTest
   // ===== 404 on unknown path =====
   testUnknownPathReturns404 =>
     resp := (HTTPClient get: self baseUrl ++ "/totally-unknown") unwrap
+    self assert: resp status equals: 404
+
+  // ===== POST /api/monitors/:name/silence =====
+  testSilenceReturns200 =>
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
+    self assert: resp status equals: 200
+
+  testSilenceReturnsSilencedTrueAndDefaultSeconds =>
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "silenced") equals: true
+    self assert: (parsed at: "seconds") equals: 3600
+
+  testSilenceHonorsSecondsInBody =>
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "\{""seconds"":60}") unwrap
+    parsed := (Json parse: resp body) unwrap
+    self assert: (parsed at: "seconds") equals: 60
+
+  testSilenceActuallySilencesTheRouter =>
+    (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
+    self assert: (self.notificationRouter isSilenced: self.monitor checkName)
+
+  testSilenceMissingMonitorReturns404 =>
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/nonexistent/silence" body: "") unwrap
+    self assert: resp status equals: 404
+
+  // ===== POST /api/monitors/:name/unsilence =====
+  testUnsilenceReturns200 =>
+    (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/unsilence" body: "") unwrap
+    self assert: resp status equals: 200
+
+  testUnsilenceActuallyClearsTheSilence =>
+    (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
+    (HTTPClient post: self baseUrl ++ "/api/monitors/web/unsilence" body: "") unwrap
+    self deny: (self.notificationRouter isSilenced: self.monitor checkName)
+
+  testUnsilenceMissingMonitorReturns404 =>
+    resp := (HTTPClient post: self baseUrl ++ "/api/monitors/nonexistent/unsilence" body: "") unwrap
     self assert: resp status equals: 404

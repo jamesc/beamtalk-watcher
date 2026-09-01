@@ -11,11 +11,23 @@
 /// Channels are any actor responding to `deliver: aMonitorEvent`.
 /// The `recentEvents` ring buffer is capped at 100 entries.
 ///
+/// ## Maintenance windows
+///
+/// `silence:for:` suppresses outbound delivery for a check, by its
+/// underlying `HealthCheck>>name` (the same identity `handleEvent:`
+/// already dedups on — NOT the `CheckRegistry` symbol a check is
+/// registered under; bridge via `Monitor>>checkName` when silencing from
+/// a registry-symbol-keyed caller, see `Watcher>>silence:for:`), for a
+/// planned-downtime window. `Monitor` keeps running the check and
+/// tracking real status throughout — only delivery to registered
+/// channels is suppressed, so the dashboard still reflects reality.
+///
 /// See SPEC.md §5.
 typed Actor subclass: NotificationRouter
   state: channels :: List(Actor) = #()
   state: rules :: List = #()
   state: recentEvents :: List(MonitorEvent) = #()
+  state: silencedUntil :: Dictionary(String, DateTime) = #{}
 
   /// Register a channel actor. Subsequent events will be forwarded to it.
   addChannel: channel :: Actor -> NotificationRouter =>
@@ -28,27 +40,55 @@ typed Actor subclass: NotificationRouter
     self.channels := self.channels reject: [:c | c == channel]
     self
 
-  /// Receive a MonitorEvent. Dedup against recent events; fan out to
-  /// every channel if not a duplicate.
+  /// Receive a MonitorEvent. Silenced checks are dropped before dedup;
+  /// otherwise dedup against recent events and fan out to every channel
+  /// if not a duplicate.
   ///
   /// Dedup window: skip when an event with the same `check name` and
   /// same `type` has been seen within the last 60 seconds.
   handleEvent: event :: MonitorEvent -> Boolean =>
-    isDuplicate := self.recentEvents
-      anySatisfy: [:e |
-        e check name == event check name and: [
-          e type == event type and: [
-            (DateTime now diffSeconds: e timestamp) < 60
-          ]
-        ]
-      ]
-    isDuplicate
+    silenced := self isSilenced: event check name
+    silenced
       ifTrue: [false]
       ifFalse: [
-        self.recentEvents := self trimRecent: (self.recentEvents add: event)
-        self.channels do: [:channel | channel deliver: event!]
-        true
+        isDuplicate := self.recentEvents
+          anySatisfy: [:e |
+            e check name == event check name and: [
+              e type == event type and: [
+                (DateTime now diffSeconds: e timestamp) < 60
+              ]
+            ]
+          ]
+        isDuplicate
+          ifTrue: [false]
+          ifFalse: [
+            self.recentEvents := self trimRecent: (self.recentEvents add: event)
+            self.channels do: [:channel | channel deliver: event!]
+            true
+          ]
       ]
+
+  /// Suppress outbound delivery for `checkName` for `seconds` seconds.
+  /// Re-silencing an already-silenced check replaces the expiry (does
+  /// not stack). See the class doc comment for what this does and
+  /// doesn't affect.
+  silence: checkName :: String for: seconds :: Integer -> NotificationRouter =>
+    self.silencedUntil := self.silencedUntil at: checkName put: (DateTime now addSeconds: seconds)
+    self
+
+  /// Clear an active silence early. Safe to call when `checkName` isn't
+  /// currently silenced.
+  unsilence: checkName :: String -> NotificationRouter =>
+    (self.silencedUntil includesKey: checkName) ifTrue: [
+      self.silencedUntil := self.silencedUntil removeKey: checkName
+    ]
+    self
+
+  /// True when `checkName` is within an active silence window right now.
+  isSilenced: checkName :: String -> Boolean =>
+    (self.silencedUntil includesKey: checkName) and: [
+      DateTime now < (self.silencedUntil at: checkName)
+    ]
 
   /// Cap the recent-event ring buffer at 100 entries (newest retained).
   trimRecent: events :: List(MonitorEvent) -> List(MonitorEvent) =>
