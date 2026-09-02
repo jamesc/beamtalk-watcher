@@ -41,13 +41,19 @@ typed Actor subclass: WebhookReceiver
 
   /// Build this receiver's route table. Split out from `startServer:` so
   /// both the direct factory and the supervised-startup path can share it.
+  /// Every route is wrapped in a `RequestLogger` (shared with `Dashboard`).
   buildRouter -> HTTPRouter =>
+    logging := RequestLogger new
     HTTPRouter
       build: [:r |
-        r post: "/webhook" handler: [:req | self handleWebhook: req]
-        r get: "/health" handler: [:req |
-          HTTPResponse new: #{#status => 200, #body => "\{""status"":""ok""}"}
-        ]
+        r post: "/webhook" handler: (PlugChain chain: #(logging) handler: [:req |
+          self handleWebhook: req
+        ])
+        r
+          get: "/health"
+          handler: (PlugChain chain: #(logging) handler: [:req |
+            HTTPResponse new: #{#status => 200, #body => "\{""status"":""ok""}"}
+          ])
       ]
 
   /// Handle one webhook POST. Parses the request body as JSON and stores

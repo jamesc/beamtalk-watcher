@@ -1,0 +1,26 @@
+// Copyright 2026 beamtalk_watcher authors
+// SPDX-License-Identifier: Apache-2.0
+
+/// MonitorExistsPlug — short-circuits with `404 {"error":"monitor not
+/// found"}` when the route's `:name` path param isn't a name registered
+/// in `registry`. Replaces the same not-found check that used to be
+/// hand-written in `Dashboard`'s `apiMonitor:`, `silenceMonitor:`, and
+/// `unsilenceMonitor:`.
+Value subclass: MonitorExistsPlug
+  field: registry :: CheckRegistry | nil = nil
+
+  class registry: aRegistry :: CheckRegistry | nil -> MonitorExistsPlug =>
+    self new: #{#registry => aRegistry}
+
+  call: request :: HTTPRequest next: next :: Block(HTTPRequest, HTTPResponse) -> HTTPResponse =>
+    name := request param: "name"
+    (self.registry names includes: name asAtom)
+      ifTrue: [next value: request]
+      ifFalse: [
+        HTTPResponse
+          new: #{
+            #status => 404,
+            #headers => #(#("content-type", "application/json")),
+            #body => "\{""error"":""monitor not found""}"
+          }
+      ]

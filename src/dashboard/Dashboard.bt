@@ -67,23 +67,49 @@ typed Actor subclass: Dashboard
 
   /// Build this dashboard's route table. Split out from `startServer:` so
   /// both the direct factory and the supervised-startup path can share it.
+  ///
+  /// Every route is wrapped in a `RequestLogger`; the `/api/monitors/
+  /// :name` family additionally gets `MonitorExistsPlug`, which short-
+  /// circuits with a 404 before the handler runs — replacing what used to
+  /// be three copies of the same not-found check. Both plugs are built
+  /// from `self.registry` as it stands right now, so — like every other
+  /// route handler here — they see a snapshot frozen at `buildRouter`
+  /// time, not live updates (see the "note on `self`" above).
   buildRouter -> HTTPRouter =>
+    logging := RequestLogger new
+    monitorExists := MonitorExistsPlug registry: self.registry
     HTTPRouter
       build: [:r |
-        r get: "/" handler: [:req | self renderIndex: req];
-          get: "/monitors" handler: [:req | self renderMonitors: req];
-          get: "/alerts" handler: [:req | self renderAlerts: req];
-          get: "/api/status" handler: [:req | self apiStatus: req];
-          get: "/api/health" handler: [:req | self apiHealth: req];
-          get: "/api/alerts" handler: [:req | self apiAlerts: req];
-          get: "/api/monitors/:name" handler: [:req | self apiMonitor: req];
-          post: "/api/monitors/:name/silence" handler: [:req |
+        r get: "/" handler: (PlugChain chain: #(logging) handler: [:req |
+          self renderIndex: req
+        ]);
+          get: "/monitors" handler: (PlugChain chain: #(logging) handler: [:req |
+            self renderMonitors: req
+          ]);
+          get: "/alerts" handler: (PlugChain chain: #(logging) handler: [:req |
+            self renderAlerts: req
+          ]);
+          get: "/api/status" handler: (PlugChain chain: #(logging) handler: [:req |
+            self apiStatus: req
+          ]);
+          get: "/api/health" handler: (PlugChain chain: #(logging) handler: [:req |
+            self apiHealth: req
+          ]);
+          get: "/api/alerts" handler: (PlugChain chain: #(logging) handler: [:req |
+            self apiAlerts: req
+          ]);
+          get: "/api/monitors/:name" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
+            self apiMonitor: req
+          ]);
+          post: "/api/monitors/:name/silence" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
             self silenceMonitor: req
-          ];
-          post: "/api/monitors/:name/unsilence" handler: [:req |
+          ]);
+          post: "/api/monitors/:name/unsilence" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
             self unsilenceMonitor: req
-          ];
-          get: "/static/*path" handler: [:req | self serveStatic: req]
+          ]);
+          get: "/static/*path" handler: (PlugChain chain: #(logging) handler: [:req |
+            self serveStatic: req
+          ])
       ]
 
   // ===== HTML page handlers =====
@@ -273,18 +299,11 @@ typed Actor subclass: Dashboard
       }
 
   /// GET /api/monitors/:name — JSON detail for a single monitor.
+  /// `MonitorExistsPlug` (see `buildRouter`) guarantees `:name` is
+  /// registered before this runs.
   apiMonitor: req :: HTTPRequest -> HTTPResponse =>
     name := req param: "name"
     nameSymbol := name asAtom
-    (self.registry names includes: nameSymbol)
-      ifFalse: [
-        ^HTTPResponse
-          new: #{
-            #status => 404,
-            #headers => #(#("content-type", "application/json")),
-            #body => "\{""error"":""monitor not found""}"
-          }
-      ]
     monitor := self.registry monitor: nameSymbol
     status := monitor status
     lastResult := monitor lastResult
@@ -303,21 +322,12 @@ typed Actor subclass: Dashboard
 
   /// POST /api/monitors/:name/silence — suppress outbound alert delivery
   /// for `:name` for `{"seconds": N}` seconds (body optional, default
-  /// 3600). 404 if `:name` isn't a registered check. See
-  /// `NotificationRouter`'s class doc comment for what silencing does
-  /// and doesn't affect.
+  /// 3600). See `NotificationRouter`'s class doc comment for what
+  /// silencing does and doesn't affect. `MonitorExistsPlug` (see
+  /// `buildRouter`) guarantees `:name` is registered before this runs.
   silenceMonitor: req :: HTTPRequest -> HTTPResponse =>
     name := req param: "name"
     nameSymbol := name asAtom
-    (self.registry names includes: nameSymbol)
-      ifFalse: [
-        ^HTTPResponse
-          new: #{
-            #status => 404,
-            #headers => #(#("content-type", "application/json")),
-            #body => "\{""error"":""monitor not found""}"
-          }
-      ]
     monitor := self.registry monitor: nameSymbol
     seconds := self silenceSecondsFrom: req body
     self.router silence: monitor checkName for: seconds
@@ -329,20 +339,12 @@ typed Actor subclass: Dashboard
       }
 
   /// POST /api/monitors/:name/unsilence — clear an active silence early
-  /// for `:name`. 404 if `:name` isn't a registered check. Safe to call
-  /// when `:name` isn't currently silenced.
+  /// for `:name`. Safe to call when `:name` isn't currently silenced.
+  /// `MonitorExistsPlug` (see `buildRouter`) guarantees `:name` is
+  /// registered before this runs.
   unsilenceMonitor: req :: HTTPRequest -> HTTPResponse =>
     name := req param: "name"
     nameSymbol := name asAtom
-    (self.registry names includes: nameSymbol)
-      ifFalse: [
-        ^HTTPResponse
-          new: #{
-            #status => 404,
-            #headers => #(#("content-type", "application/json")),
-            #body => "\{""error"":""monitor not found""}"
-          }
-      ]
     monitor := self.registry monitor: nameSymbol
     self.router unsilence: monitor checkName
     HTTPResponse
