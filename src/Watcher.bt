@@ -227,17 +227,9 @@ typed Actor subclass: Watcher
   /// every restart) must not be left to either loop forever or crash
   /// `Watcher` itself — both are caught and logged, leaving that one
   /// subsystem down rather than escalating.
-  /// `self recordRestartAttempt: which` must be a top-level statement of
-  /// THIS method, not nested inside a block passed to ifTrue:/ifFalse: —
-  /// a mutating self-call loses its mutation once something else in the
-  /// same block reads/branches on its result, even bound to a local first
-  /// (confirmed via a minimal repro; filed as BT-3382). Hence the early
-  /// `^self` guard below instead of wrapping the rest of the method in
-  /// `self.shuttingDown ifFalse: [...]`.
   internal childExited: which :: Symbol reason: _reason :: Object -> Watcher =>
     self.shuttingDown ifTrue: [^self]
-    withinBudget := self recordRestartAttempt: which
-    withinBudget
+    (self recordRestartAttempt: which)
       ifTrue: [
         [self respawn: which]
           on: Error
@@ -257,32 +249,14 @@ typed Actor subclass: Watcher
       ]
     self
 
-  /// Dispatch to the one `configureX` matching `which`. Nested
-  /// `ifTrue:ifFalse:` (rather than a flat sequence of `ifTrue:` checks)
-  /// so once a branch matches, no subsequent condition is evaluated at
-  /// all — a flat sequence was observed to corrupt an earlier matching
-  /// branch's already-completed side effects merely by evaluating a
-  /// *later*, non-matching `ifTrue:` check afterward (filed as BT-3378).
+  /// Dispatch to the one `configureX` matching `which`.
   internal respawn: which :: Symbol -> Watcher =>
-    which == #alertLog
-      ifTrue: [self configureAlertLog]
-      ifFalse: [
-        which == #router
-          ifTrue: [self configureRouter]
-          ifFalse: [
-            which == #registry
-              ifTrue: [self configureRegistry]
-              ifFalse: [
-                which == #receiver ifTrue: [
-                  self configureReceiver
-                ] ifFalse: [
-                  which == #dashboard ifTrue: [
-                    self configureDashboard
-                  ] ifFalse: [self]
-                ]
-              ]
-          ]
-      ]
+    which == #alertLog ifTrue: [self configureAlertLog]
+    which == #router ifTrue: [self configureRouter]
+    which == #registry ifTrue: [self configureRegistry]
+    which == #receiver ifTrue: [self configureReceiver]
+    which == #dashboard ifTrue: [self configureDashboard]
+    self
 
   /// Record a restart attempt for `which` and report whether it's still
   /// within budget (fewer than `maxRestarts` recorded in the last
@@ -413,26 +387,14 @@ typed Actor subclass: Watcher
       #restartCount => self restartCountFor: role
     }
 
-  /// The current actor instance for a sub-actor role — nested
-  /// `ifTrue:ifFalse:` for the same reason as `respawn:` (see BT-3378).
+  /// The current actor instance for a sub-actor role.
   internal actorFor: role :: Symbol -> Actor | nil =>
-    role == #alertLog
-      ifTrue: [self.alertLog]
-      ifFalse: [
-        role == #router
-          ifTrue: [self.router]
-          ifFalse: [
-            role == #registry
-              ifTrue: [self.registry]
-              ifFalse: [
-                role == #receiver ifTrue: [
-                  self.receiver
-                ] ifFalse: [
-                  role == #dashboard ifTrue: [self.dashboard] ifFalse: [nil]
-                ]
-              ]
-          ]
-      ]
+    role == #alertLog ifTrue: [^self.alertLog]
+    role == #router ifTrue: [^self.router]
+    role == #registry ifTrue: [^self.registry]
+    role == #receiver ifTrue: [^self.receiver]
+    role == #dashboard ifTrue: [^self.dashboard]
+    nil
 
   /// Count of restarts recorded for `role` within the last `restartWindow`
   /// seconds. Recomputed on demand, mirroring `CheckRegistry>>restartCountFor:`.

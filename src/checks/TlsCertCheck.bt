@@ -55,20 +55,6 @@ sealed typed Value subclass: TlsCertCheck
 
   /// Codepoint lookup table for the RFC 1123 hostname charset. See
   /// `hostCharlist` for why this exists instead of an Erlang round-trip.
-  ///
-  /// `@expect dead_assignment` below: `beamtalk lint` claims reassigning
-  /// `dict` inside each `do:` block "has no effect" (Value-type blocks
-  /// supposedly capture by value) — confirmed false positive by dumping
-  /// `hostCharCodes` at runtime (all 64 entries present and correct).
-  /// `inject:into:` avoids the reassignment shape entirely but isn't used
-  /// instead: its generic accumulator type isn't resolved concretely even
-  /// with an explicitly-typed seed value, which trades this one lint
-  /// false-positive for six real `beamtalk lint`/`build` Dynamic-type
-  /// warnings. Note `beamtalk build` (unlike `beamtalk lint`) doesn't run
-  /// this check at all, so it reports this same `@expect` as stale — a
-  /// tooling inconsistency (filed as BT-3384), not a sign the suppression
-  /// is wrong.
-  @expect dead_assignment
   class hostCharCodes -> Dictionary(String, Integer) =>
     dict := #{}
     97 to: 122 do: [:code |
@@ -117,17 +103,9 @@ sealed typed Value subclass: TlsCertCheck
   internal connectOptions -> List =>
     #((Tuple withAll: #(#verify, #verify_peer)), (Tuple withAll: #(#server_name_indication, self hostCharlist)), (Tuple withAll: #(#cacerts, self systemCaCerts)))
 
-  /// public_key:cacerts_get/0 — the OS's default trusted CA bundle. Split
-  /// across two methods because the module reference and the call each
-  /// need a different, mutually-exclusive `@expect` category on the same
-  /// line if combined: `public_key` isn't in the compiler's known-OTP-
-  /// module list (needs `unresolved_ffi`, even though the module exists
-  /// at runtime — it ships with every Erlang/OTP install), and the call's
-  /// return type is Dynamic (needs `type`). A single expression can only
-  /// carry one `@expect` category (BT-3387).
+  /// public_key:cacerts_get/0 — the OS's default trusted CA bundle.
   internal systemCaCerts -> Object => self publicKeyModule cacerts_get
 
-  @expect unresolved_ffi
   internal publicKeyModule -> ErlangModule => Erlang public_key
 
   /// `server_name_indication` must be a genuine Erlang charlist (a plain

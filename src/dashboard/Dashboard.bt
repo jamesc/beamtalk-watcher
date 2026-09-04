@@ -238,42 +238,41 @@ typed Actor subclass: Dashboard
   /// window. `{"available": false}` when no `HealthReporter` is attached
   /// (the direct/test factory `start:registry:alertLog:` doesn't set one).
   ///
-  /// The `#{...}` conversion is inlined directly in each `collect:` block
-  /// below rather than delegated to a helper method (contrast
-  /// `apiStatus:`'s block, which does the same) — `subsystems collect:
-  /// [:s | self healthEntryJson: s]` (calling a helper) demonstrably
-  /// degrades the result's species from `List` to `Tuple`, and `Json
-  /// generate:` doesn't accept `Tuple`. Confirmed by isolating the two
-  /// otherwise-identical shapes side by side; filed as BT-3383.
+  /// Early-return guard rather than wrapping the rest of the method in
+  /// `self.healthReporter isNil ifTrue:/ifFalse:` — a `self`-call
+  /// `collect:` *computed inside* an `ifTrue:/ifFalse:` branch (even
+  /// assigned to a local there first) degrades its result's species from
+  /// `List` to `Tuple`, which `Json generate:` rejects; computing it
+  /// unconditionally, outside any branch, does not. A narrower, still-open
+  /// variant of BT-3383 (filed as BT-3425).
   apiHealth: _req :: HTTPRequest -> HTTPResponse =>
-    data := self.healthReporter isNil
-      ifTrue: [#{"available" => false}]
-      ifFalse: [
-        health := self.healthReporter subsystemHealth
-        subsystems := health at: #subsystems
-        checks := health at: #checks
-        #{"available" => true, "subsystems" => subsystems
-            collect: [:s |
-              #{
-                "name" => (s at: #name) displayString,
-                "alive" => s at: #alive,
-                "restartCount" => s at: #restartCount
-              }
-            ], "checks" => checks
-            collect: [:c |
-              #{
-                "name" => (c at: #name) displayString,
-                "alive" => c at: #alive,
-                "restartCount" => c at: #restartCount
-              }
-            ]}
-      ]
+    self.healthReporter isNil ifTrue: [
+      ^HTTPResponse
+        new: #{
+          #status => 200,
+          #headers => #(#("content-type", "application/json")),
+          #body => Json generate: #{"available" => false}
+        }
+    ]
+    health := self.healthReporter subsystemHealth
+    subsystemsJson := (health at: #subsystems) collect: [:s | self healthEntryJson: s]
+    checksJson := (health at: #checks) collect: [:c | self healthEntryJson: c]
+    data := #{"available" => true, "subsystems" => subsystemsJson, "checks" => checksJson}
     HTTPResponse
       new: #{
         #status => 200,
         #headers => #(#("content-type", "application/json")),
         #body => Json generate: data
       }
+
+  /// JSON-shape a single subsystem/check health entry (`#name`/`#alive`/
+  /// `#restartCount`) for `apiHealth:`.
+  internal healthEntryJson: entry :: Dictionary -> Dictionary =>
+    #{
+      "name" => (entry at: #name) displayString,
+      "alive" => entry at: #alive,
+      "restartCount" => entry at: #restartCount
+    }
 
   /// GET /api/alerts — JSON alert list.
   apiAlerts: _req :: HTTPRequest -> HTTPResponse =>

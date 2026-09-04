@@ -126,18 +126,9 @@ typed Actor subclass: CheckRegistry
   /// every restart would otherwise respawn forever. A `spawnMonitorFor:`
   /// failure is caught here rather than left to crash this whole registry
   /// (and every other check it tracks) over one bad check.
-  ///
-  /// `self recordRestartAttempt: name` must be a top-level statement of
-  /// THIS method, not nested inside a block passed to ifTrue:/ifFalse: —
-  /// a mutating self-call loses its mutation once something else in the
-  /// same block reads/branches on its result, even bound to a local first
-  /// (confirmed via a minimal repro; filed as BT-3382). Hence the early
-  /// `^self` guard below instead of wrapping the rest of the method in
-  /// `(self.monitors includesKey: name) ifTrue: [...]`.
   internal monitorExited: name :: Symbol reason: _reason :: Object -> CheckRegistry =>
     (self.monitors includesKey: name) ifFalse: [^self]
-    withinBudget := self recordRestartAttempt: name
-    withinBudget
+    (self recordRestartAttempt: name)
       ifTrue: [
         [self spawnMonitorFor: name]
           on: Error
