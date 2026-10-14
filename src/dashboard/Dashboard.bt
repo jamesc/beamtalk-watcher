@@ -246,18 +246,25 @@ typed Actor subclass: Dashboard
   /// unconditionally, outside any branch, does not. A narrower, still-open
   /// variant of BT-3383 (filed as BT-3425).
   apiHealth: _req :: HTTPRequest -> HTTPResponse =>
-    self.healthReporter isNil ifTrue: [
-      ^HTTPResponse
-        new: #{
-          #status => 200,
-          #headers => #(#("content-type", "application/json")),
-          #body => Json generate: #{"available" => false}
-        }
-    ]
+    self.healthReporter isNil
+      ifTrue: [
+        ^HTTPResponse
+          new: #{
+            #status => 200,
+            #headers => #(#("content-type", "application/json")),
+            #body => Json generate: #{"available" => false}
+          }
+      ]
     health := self.healthReporter subsystemHealth
-    subsystemsJson := (health at: #subsystems) collect: [:s | self healthEntryJson: s]
+    subsystemsJson := (health at: #subsystems) collect: [:s |
+      self healthEntryJson: s
+    ]
     checksJson := (health at: #checks) collect: [:c | self healthEntryJson: c]
-    data := #{"available" => true, "subsystems" => subsystemsJson, "checks" => checksJson}
+    data := #{
+      "available" => true,
+      "subsystems" => subsystemsJson,
+      "checks" => checksJson
+    }
     HTTPResponse
       new: #{
         #status => 200,
