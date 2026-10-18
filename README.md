@@ -21,7 +21,7 @@ just test
 
 ## Quickstart
 
-The top-level entry point is the `Watcher` actor (see `src/Watcher.bt`).
+The top-level entry point is the `Watcher` actor (see `src/watcher.bt`).
 Bring it up with default ports (dashboard on `8080`, receiver on `8081`,
 no checks, no outbound webhook):
 

@@ -666,25 +666,25 @@ w alertLog recent: 5
 beamtalk-watcher/
 ├── beamtalk.toml              # Project manifest
 ├── src/
-│   ├── Watcher.bt             # Top-level application actor
-│   ├── CheckRegistry.bt       # Monitor registry
-│   ├── Monitor.bt             # Per-check monitor actor
-│   ├── MonitorEvent.bt        # State change event value object
-│   ├── CheckResult.bt         # Check result value object
-│   ├── Alert.bt               # Received alert value object
+│   ├── watcher.bt             # Top-level application actor
+│   ├── check_registry.bt      # Monitor registry
+│   ├── monitor.bt             # Per-check monitor actor
+│   ├── monitor_event.bt       # State change event value object
+│   ├── check_result.bt        # Check result value object
+│   ├── alert.bt               # Received alert value object
 │   ├── checks/
-│   │   ├── HealthCheck.bt     # Protocol definition
-│   │   ├── HttpHealthCheck.bt
-│   │   ├── TcpPortCheck.bt
-│   │   └── ProcessCheck.bt
+│   │   ├── health_check.bt    # Protocol definition
+│   │   ├── http_health_check.bt
+│   │   ├── tcp_port_check.bt
+│   │   └── process_check.bt
 │   ├── notifications/
-│   │   ├── NotificationRouter.bt
-│   │   └── WebhookChannel.bt
+│   │   ├── notification_router.bt
+│   │   └── webhook_channel.bt
 │   ├── receiver/
-│   │   ├── WebhookReceiver.bt
-│   │   └── AlertLog.bt
+│   │   ├── webhook_receiver.bt
+│   │   └── alert_log.bt
 │   └── dashboard/
-│       └── Dashboard.bt
+│       └── dashboard.bt
 ├── static/
 │   ├── style.css
 │   └── app.js
