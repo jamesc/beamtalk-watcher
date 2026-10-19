@@ -215,12 +215,6 @@ typed Actor subclass: Watcher
   /// role, unless we're mid-`shutdown` (in which case this exit was us,
   /// not a crash — do nothing).
   ///
-  /// Each branch calls its `configureX` as a plain statement rather than
-  /// `^self configureX` — a non-local return of a non-Nil self-call, from
-  /// a method dispatched as a cast, silently drops the call (filed as
-  /// BT-3374). Falling through to a bare `self` after each branch avoids
-  /// the pattern entirely.
-  ///
   /// Bounded by `maxRestarts`/`restartWindow`: `Watcher` is the top of
   /// this app's tree with nothing above it to restart it, so a
   /// `configureX` that fails (or a sub-actor that crashes immediately on

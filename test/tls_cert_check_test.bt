@@ -102,8 +102,4 @@ TestCase subclass: TlsCertCheckTest
   // ----- unsupported host characters raise rather than mis-encode -----
   testUnsupportedHostCharacterRaises =>
     check := TlsCertCheck host: "exämple.com"
-    result := [
-      check check
-      #did_not_raise
-    ] on: Error do: [:e | #raised]
-    self assert: result equals: #raised
+    self should: [check check] raise: #signal
