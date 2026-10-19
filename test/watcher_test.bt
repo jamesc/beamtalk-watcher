@@ -153,16 +153,16 @@ TestCase subclass: WatcherTest
     self deny: (self.watcher router isSilenced: monitor checkName)
 
   testUnknownCheckTypeRaises =>
-    result := [
-      self.watcher addCheckFromConfig: #{
-        #type => #foobar,
-        #name => #bad,
-        #interval => 9999,
-        #threshold => 3
-      }
-      #did_not_raise
-    ] on: Error do: [:e | #raised]
-    self assert: result equals: #raised
+    self
+      should: [
+        self.watcher addCheckFromConfig: #{
+          #type => #foobar,
+          #name => #bad,
+          #interval => 9999,
+          #threshold => 3
+        }
+      ]
+      raise: #signal
 
   testStartupChecksFromConfig =>
     w := Watcher

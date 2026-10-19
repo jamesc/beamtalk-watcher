@@ -186,13 +186,10 @@ TestCase subclass: MonitorTest
   testHistoryRetainsMostRecentEntries =>
     // First 3 fails then many oks — the early fails should be dropped
     // from the front once the buffer fills past 50.
-    //
-    // Build the script via inject:into: rather than a do: loop because
-    // assignments inside a block don't propagate to the enclosing scope.
     ok := self okResult
     fail := self failResult
-    base := List withAll: #(fail, fail, fail)
-    script := (1 to: 60) inject: base into: [:acc :_ | acc add: ok]
+    script := List withAll: #(fail, fail, fail)
+    1 to: 60 do: [:_ | script := script add: ok]
     rig := self monitorWith: script threshold: 3
     monitor :: Monitor := rig at: #monitor
     1 to: 63 do: [:_ | monitor runCheck]

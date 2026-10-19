@@ -116,11 +116,7 @@ TestCase subclass: CheckRegistryTest
   testRemoveMissingNameRaises =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    result := [
-      registry remove: #nonexistent
-      #did_not_raise
-    ] on: Error do: [:e | #raised]
-    self assert: result equals: #raised
+    self should: [registry remove: #nonexistent] raise: #key_error
 
   // ===== Status aggregation =====
   testStatusReturnsListOfSnapshots =>
@@ -213,11 +209,7 @@ TestCase subclass: CheckRegistryTest
   testMonitorLookupMissingNameRaises =>
     rig := self registryWithRouter
     registry :: CheckRegistry := rig at: #registry
-    result := [
-      registry monitor: #missing
-      #did_not_raise
-    ] on: Error do: [:e | #raised]
-    self assert: result equals: #raised
+    self should: [registry monitor: #missing] raise: #key_error
 
   // ===== Names =====
   testNamesEmptyInitially =>
