@@ -341,3 +341,60 @@ TestCase subclass: WatcherTest
     parsed := (Json parse: resp body) unwrap
     self assert: (parsed at: "available") equals: true
     self assert: (parsed at: "subsystems") size equals: 5
+
+  // ===== Per-Watcher MonitorSupervisor (ADR 0135) =====
+  //
+  // Each Watcher's registry runs its Monitors under its own
+  // `MonitorSupervisor` instance, so stopping one Watcher leaves another
+  // Watcher's Monitors running.
+  testWatchersHaveIndependentMonitorSupervisors =>
+    other := Watcher
+      startWith: #{
+        #dashboardPort => 0,
+        #receiverPort => 0,
+        #checks => #(#{
+          #type => #process,
+          #name => #db,
+          #process => #kernel_sup,
+          #interval => 9999,
+          #threshold => 3
+        })
+      }
+    self.watcher
+      addCheckFromConfig: #{
+        #type => #process,
+        #name => #web,
+        #process => #kernel_sup,
+        #interval => 9999,
+        #threshold => 3
+      }
+    mySupervisor := self.watcher registry supervisor
+    otherSupervisor := other registry supervisor
+    self deny: mySupervisor == otherSupervisor
+    otherMonitor := other registry monitor: #db
+    self.watcher shutdown
+    self assert: (Result tryDo: [mySupervisor count]) isError
+    self assert: otherSupervisor count equals: 1
+    self assert: otherMonitor isAlive
+    other shutdown
+
+  testRegistryCrashStopsItsMonitorSupervisor =>
+    self.watcher
+      addCheckFromConfig: #{
+        #type => #process,
+        #name => #web,
+        #process => #kernel_sup,
+        #interval => 9999,
+        #threshold => 3
+      }
+    original := self.watcher registry supervisor
+    orphan := self.watcher registry monitor: #web
+    self.watcher registry kill
+    (Erlang timer) sleep: 500
+    // The crashed registry's Monitors went down with its supervisor
+    // instead of running on, unreachable, beside the fresh registry's.
+    self assert: (Result tryDo: [original count]) isError
+    self deny: orphan isAlive
+    replacement := self.watcher registry supervisor
+    self deny: replacement == original
+    self assert: replacement count equals: 0

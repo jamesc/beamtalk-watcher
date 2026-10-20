@@ -47,19 +47,15 @@
 /// `configureRouter`, `configureRegistry`, `configureReceiver`,
 /// `configureDashboard`, dispatched from `childExited:reason:`).
 ///
-/// This is deliberately *not* a real OTP `Supervisor`/`DynamicSupervisor`:
-/// a `Supervisor`'s children are a single set shared by every instance of
-/// the supervisor class (`class supervise` always returns the same
-/// running instance) — fine for a single, static tree, but wrong here,
-/// since a running node can have several independent `Watcher`s at once
-/// (every test in `WatcherTest` does), each needing its own private set
-/// of sub-actors. Routing them through a shared `Supervisor` was tried
-/// and confirmed broken: two `Watcher`s ended up silently sharing one
-/// `Dashboard`/`AlertLog`/`WebhookReceiver`. So each `Watcher` instead
-/// does its own plain, per-instance `spawn` + `onExit:` — the same
-/// recipe `CheckRegistry` uses for its `Monitor`s, just without a
-/// `DynamicSupervisor` underneath (not needed here: these are fixed,
-/// one-of-each children, not a dynamically-sized pool).
+/// Every `Watcher` owns a private tree: its own sub-actors and its own
+/// `MonitorSupervisor` instance (`MonitorSupervisor spawn`, ADR 0135),
+/// handed to its `CheckRegistry`. Several `Watcher`s can run on one node
+/// (every test in `WatcherTest` does), and stopping one leaves the
+/// others' Monitors running. The sub-actors are restarted by `Watcher`
+/// itself rather than by an OTP `Supervisor` because a restart has to
+/// rewire siblings (the Dashboard holds the registry, the receiver holds
+/// the AlertLog) and feed the per-role restart counts `subsystemHealth`
+/// reports.
 ///
 /// Reconfiguring restores what `Watcher` itself knows how to rebuild from
 /// `self.config` (ports, registry/AlertLog wiring, the one config-derived
@@ -67,15 +63,11 @@
 /// inside the crashed actor. Two known gaps from that:
 ///   * Channels added to the router at runtime via `router addChannel:`
 ///     (rather than `#webhookUrl`) are lost on a router restart.
-///   * If `CheckRegistry` itself crashes (as opposed to one of the
-///     `Monitor`s it manages — that case *is* handled, see
-///     `CheckRegistry`), every `Monitor` it had already spawned is
-///     orphaned: they keep running under `MonitorSupervisor`, invisible
-///     to the fresh, empty `CheckRegistry`, and `configureRegistry`
-///     replaying `#checks` spawns brand-new duplicates for the same
-///     names. Recovering cleanly from that would need `CheckRegistry`'s
-///     own state to survive its crash, which is a bigger change than
-///     watching it for crashes.
+///   * Checks added to the registry at runtime (rather than via
+///     `#checks`) are lost on a registry restart. `configureRegistry`
+///     stops the crashed registry's `MonitorSupervisor`, and with it
+///     every Monitor it had spawned, before replaying `#checks` into a
+///     fresh registry and supervisor, so no Monitor is orphaned.
 ///
 /// ## Health telemetry
 ///
@@ -95,6 +87,10 @@ typed Actor subclass: Watcher
   state: receiver :: WebhookReceiver | nil = nil
   state: dashboard :: Dashboard | nil = nil
   state: config :: Dictionary = #{}
+  // The `MonitorSupervisor` handed to the current `registry`. The
+  // registry stops it on `shutdown`; `configureRegistry` keeps this
+  // reference so it can stop it after a registry crash too.
+  state: monitorSupervisor :: MonitorSupervisor | nil = nil
   // Set at the start of `shutdown` so `childExited:reason:` doesn't treat
   // the deliberate teardown of alertLog/router (plain `Actor>>stop`, which
   // also fires `onExit:`) as a crash to recover from.
@@ -167,13 +163,21 @@ typed Actor subclass: Watcher
     self.router onExit: [:reason | self childExited: #router reason: reason!]
     self
 
-  /// (Re)spawn and configure the CheckRegistry: wires it to the router
-  /// and a `MonitorSupervisor`, replays the configured checks, and arms
-  /// crash detection.
+  /// (Re)spawn and configure the CheckRegistry: stops the previous
+  /// registry's `MonitorSupervisor` (and its Monitors) if a crash left it
+  /// running, wires a fresh registry to the router and a new
+  /// `MonitorSupervisor` of its own, replays the configured checks, and
+  /// arms crash detection.
   internal configureRegistry -> Watcher =>
+    self.monitorSupervisor isNil
+      ifFalse: [
+        // A registry that crashed with an error ran `terminate:` and
+        // already stopped it; a killed one did not.
+        [self.monitorSupervisor stop] on: Error do: [:e | nil]
+      ]
     self.registry := CheckRegistry spawn
-    monitorSupervisor := (MonitorSupervisor supervise) unwrap
-    self.registry configure: self.router supervisor: monitorSupervisor
+    self.monitorSupervisor := MonitorSupervisor spawn
+    self.registry configure: self.router supervisor: self.monitorSupervisor
     checks :: List(Dictionary) := self.config at: #checks ifAbsent: [#()]
     checks do: [:checkConfig | self addCheckFromConfig: checkConfig]
     self.registry onExit: [:reason |
@@ -403,10 +407,10 @@ typed Actor subclass: Watcher
 
   /// Stop every sub-actor this Watcher owns. `dashboard`/`receiver`/
   /// `registry` each get their own instance `shutdown` first (HTTP server
-  /// / Monitor cleanup — also reachable via `terminate:` if something
-  /// else stops one of them directly) before the actor itself is stopped;
-  /// `router`/`alertLog` hold no such resources so a plain `stop`
-  /// suffices. `shuttingDown` is set first so `childExited:reason:`
+  /// / Monitors and their `MonitorSupervisor` — also reachable via
+  /// `terminate:` if something else stops one of them directly) before
+  /// the actor itself is stopped; `router`/`alertLog` hold no such
+  /// resources so a plain `stop` suffices. `shuttingDown` is set first so `childExited:reason:`
   /// doesn't try to resurrect these as if they'd crashed. Safe to call
   /// multiple times.
   shutdown -> Watcher =>

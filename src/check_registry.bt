@@ -12,10 +12,10 @@
 ///
 /// ## Supervision
 ///
-/// Monitors are started as children of a `MonitorSupervisor` rather than
-/// via a bare `spawnWith:`, so a crashed Monitor is cleanly torn down and
-/// removable via `terminateChild:` instead of leaking a dead-but-registered
-/// process. `supervisionPolicy` on `Monitor` stays `#temporary` (the
+/// Monitors are started as children of this registry's own
+/// `MonitorSupervisor` instance rather than via a bare `spawnWith:`, so a
+/// crashed Monitor is cleanly torn down and removable via
+/// `terminateChild:` instead of leaking a dead-but-registered process. `supervisionPolicy` on `Monitor` stays `#temporary` (the
 /// `Actor` default), so the registry — not OTP — notices a crash and
 /// respawns the check: `add:` remembers each check's config in `configs`,
 /// and `spawnMonitorFor:` re-arms `onExit:` on every spawned Monitor so a
@@ -37,6 +37,11 @@
 /// left to crash the whole registry (and every *other* check it tracks)
 /// over one bad check.
 ///
+/// The registry owns its `MonitorSupervisor`: `shutdown` (and so a
+/// graceful `stop`, via `terminate:`) stops it along with every Monitor
+/// under it. Other registries, each with their own instance, are
+/// unaffected.
+///
 /// See SPEC.md §10.
 typed Actor subclass: CheckRegistry
   state: monitors :: Dictionary(Symbol, Monitor) = #{}
@@ -56,14 +61,16 @@ typed Actor subclass: CheckRegistry
   // ===== Class-side factory =====
 
   /// Spawn a new, unsupervised CheckRegistry wired to the given
-  /// notification router, backed by a fresh `MonitorSupervisor` that
-  /// every Monitor is started under. `Watcher` goes through `configure:`
-  /// on a bare spawn instead (so it can rewire the same instance after a
-  /// crash — see `Watcher configureRegistry`); this factory is for
-  /// direct/test use.
+  /// notification router, backed by its own fresh `MonitorSupervisor`
+  /// instance that every Monitor is started under. `Watcher` goes
+  /// through `configure:supervisor:` on a bare spawn instead (so it can
+  /// clean up the old instance after a registry crash — see
+  /// `Watcher configureRegistry`); this factory is for direct/test use.
   class start: aRouter :: EventListener -> CheckRegistry =>
-    sup := (MonitorSupervisor supervise) unwrap
-    self spawnWith: #{#router => aRouter, #supervisor => sup}
+    self spawnWith: #{
+      #router => aRouter,
+      #supervisor => MonitorSupervisor spawn
+    }
 
   /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — tear down
   /// our Monitors the same way an explicit `shutdown` would, so a Watcher
@@ -73,7 +80,10 @@ typed Actor subclass: CheckRegistry
     nil
 
   /// Fill in a bare (supervisor-spawned) CheckRegistry's config. Call
-  /// once, before `add:`. See `Watcher configureRegistry`.
+  /// once, before `add:`. The registry takes ownership of `sup` and
+  /// stops it in `shutdown`, so pass a fresh instance
+  /// (`MonitorSupervisor spawn`), not one shared with another registry.
+  /// See `Watcher configureRegistry`.
   configure: aRouter :: EventListener supervisor: sup :: MonitorSupervisor -> CheckRegistry =>
     self.router := aRouter
     self.supervisor := sup
@@ -180,19 +190,21 @@ typed Actor subclass: CheckRegistry
     (self.supervisor terminateChild: monitor) unwrap
     self
 
-  /// Stop and terminate every Monitor this registry started. Does *not*
-  /// stop `supervisor` itself: `MonitorSupervisor` is an app-wide
-  /// singleton (`DynamicSupervisor class supervise` always returns the
-  /// same running instance), so stopping it here would take down every
-  /// other registry sharing it too — this only tears down children this
-  /// registry actually owns. Safe to call multiple times.
+  /// Stop every Monitor this registry started, then stop its own
+  /// `MonitorSupervisor` (which terminates the Monitors under it). Only
+  /// this registry's instance is stopped; other registries keep theirs.
+  /// Safe to call multiple times: the second call finds no supervisor.
   shutdown -> CheckRegistry =>
-    self.monitors
-      do: [:monitor |
-        monitor stopMonitoring
-        (self.supervisor terminateChild: monitor) unwrap
-      ]
+    self.monitors do: [:monitor | monitor stopMonitoring]
+    // `monitors` is cleared before the supervisor stops, so the
+    // `onExit:` handlers that fire as it stops each Monitor find nothing
+    // to respawn.
     self.monitors := #{}
+    self.supervisor isNil
+      ifFalse: [
+        self.supervisor stop
+        self.supervisor := nil
+      ]
     self.configs := #{}
     self.restartTimestamps := #{}
     self
@@ -220,6 +232,9 @@ typed Actor subclass: CheckRegistry
 
   /// Return all registered monitor names.
   names -> List(Symbol) => self.monitors keys
+
+  /// This registry's own `MonitorSupervisor`, or nil after `shutdown`.
+  supervisor -> MonitorSupervisor | nil => self.supervisor
 
   /// Restart-loop-protection snapshot for every tracked check: name,
   /// whether its Monitor is currently alive, and how many times it's been
