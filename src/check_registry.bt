@@ -197,7 +197,8 @@ typed Actor subclass: CheckRegistry
   shutdown -> CheckRegistry =>
     self.monitors do: [:monitor | monitor stopMonitoring]
     // `monitors` is cleared before the supervisor stops, so the
-    // `onExit:` casts its stop fires find nothing to respawn.
+    // `onExit:` handlers that fire as it stops each Monitor find nothing
+    // to respawn.
     self.monitors := #{}
     self.supervisor isNil
       ifFalse: [
