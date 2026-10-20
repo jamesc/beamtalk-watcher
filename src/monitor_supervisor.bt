@@ -1,7 +1,15 @@
 // Copyright 2026 beamtalk_watcher authors
 // SPDX-License-Identifier: Apache-2.0
 
-/// MonitorSupervisor — DynamicSupervisor managing every `Monitor` actor.
+/// MonitorSupervisor — DynamicSupervisor managing one `CheckRegistry`'s
+/// `Monitor` actors.
+///
+/// Each `CheckRegistry` gets its own anonymous instance
+/// (`MonitorSupervisor spawn`, ADR 0135), never the class-named
+/// `supervise` singleton, so two `Watcher`s on one node keep separate
+/// Monitor pools and stopping one registry's supervisor leaves every other
+/// registry's Monitors running. The registry stops its instance in
+/// `CheckRegistry>>shutdown`.
 ///
 /// `CheckRegistry` starts children through this supervisor instead of
 /// calling `Monitor spawnWith:` directly, so a crash in one check's
@@ -22,4 +30,4 @@
 /// See SPEC.md §3, §10.
 DynamicSupervisor(Monitor) subclass: MonitorSupervisor
 
-  class childClass => Monitor
+  childClass => Monitor

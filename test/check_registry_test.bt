@@ -406,3 +406,30 @@ TestCase subclass: CheckRegistryTest
         (Erlang timer) sleep: 300
       ]
     self assert: registry restartHealth isEmpty
+
+  // ===== Supervisor ownership (ADR 0135) =====
+  //
+  // Each registry owns its own `MonitorSupervisor` instance, so `shutdown`
+  // can stop it without touching any other registry's Monitors.
+  testShutdownStopsOnlyItsOwnSupervisor =>
+    mine :: CheckRegistry := self registryWithRouter at: #registry
+    other :: CheckRegistry := self registryWithRouter at: #registry
+    mine
+      add: (self okCheck: "mine")
+      name: #mine
+      interval: 9999
+      threshold: 3
+    other
+      add: (self okCheck: "other")
+      name: #other
+      interval: 9999
+      threshold: 3
+    mySupervisor := mine supervisor
+    otherSupervisor := other supervisor
+    self deny: mySupervisor == otherSupervisor
+    mine shutdown
+    self assert: mine supervisor isNil
+    self assert: (Result tryDo: [mySupervisor count]) isError
+    self assert: otherSupervisor count equals: 1
+    self assert: (other monitor: #other) isAlive
+    other shutdown

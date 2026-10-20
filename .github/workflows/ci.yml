@@ -21,9 +21,12 @@ jobs:
         with:
           otp-version: "28.5"
 
+      # --edge (the rolling main build) because the nightly is stale and
+      # predates ADR 0135's instance-side supervisor configuration. Switch
+      # back to --nightly once nightlies publish again (BT-3980).
       - name: Install Beamtalk
         run: |
-          curl -fsSL https://beamtalk.dev/install.sh | sudo sh -s -- --nightly --prefix /usr/local
+          curl -fsSL https://beamtalk.dev/install.sh | sudo sh -s -- --edge --prefix /usr/local
           beamtalk --version
 
       - name: Install just
