@@ -37,7 +37,7 @@ typed Actor subclass: Monitor
   state: consecutiveFailures :: Integer = 0
   state: consecutiveRecoveries :: Integer = 0
   state: lastResult :: CheckResult | nil = nil
-  state: listener :: EventListener | nil = nil
+  late state: listener :: EventListener
   state: history :: List(CheckResult) = #()
   state: timer :: Timer | nil = nil
 

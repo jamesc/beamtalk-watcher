@@ -6,10 +6,10 @@
 /// in `registry`. Replaces the same not-found check that used to be
 /// hand-written in `Dashboard`'s `apiMonitor:`, `silenceMonitor:`, and
 /// `unsilenceMonitor:`.
-Value subclass: MonitorExistsPlug
-  field: registry :: CheckRegistry | nil = nil
+typed Value subclass: MonitorExistsPlug
+  field: registry :: CheckRegistry
 
-  class registry: aRegistry :: CheckRegistry | nil -> MonitorExistsPlug =>
+  class registry: aRegistry :: CheckRegistry -> MonitorExistsPlug =>
     self new: #{#registry => aRegistry}
 
   call: request :: HTTPRequest next: next :: Block(HTTPRequest, HTTPResponse) -> HTTPResponse =>

@@ -7,17 +7,21 @@ TestCase subclass: MonitorEventTest
 
   // --- Factory + auto-timestamp ---
   testFactoryCreatesEvent =>
+    mon := AlertLog spawn
+    chk := StubCheck name: "chk" target: "localhost"
+    res := CheckResult ok: "chk" details: "up"
     event := MonitorEvent
       type: #alert
-      monitor: "mon"
-      check: "chk"
-      result: "res"
+      monitor: mon
+      check: chk
+      result: res
       previousStatus: #ok
     self assert: event type equals: #alert
-    self assert: event monitor equals: "mon"
-    self assert: event check equals: "chk"
-    self assert: event result equals: "res"
+    self assert: event monitor equals: mon
+    self assert: event check equals: chk
+    self assert: event result equals: res
     self assert: event previousStatus equals: #ok
+    mon stop
 
   testFactoryAutoStampsTimestamp =>
     event := MonitorEvent

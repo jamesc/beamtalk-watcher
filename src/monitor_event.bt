@@ -6,16 +6,16 @@
 /// Created by Monitor when status transitions occur (alert or recovery).
 /// Carries the event type, originating monitor/check, the triggering
 /// result, and the previous status for context.
-sealed Value subclass: MonitorEvent
+sealed typed Value subclass: MonitorEvent
   field: type :: Symbol = #unknown  // #alert | #recovered
-  field: monitor :: Actor | nil = nil
-  field: check = nil  // HealthCheck implementor — Object union once protocol typing lands
-  field: result :: CheckResult | nil = nil  // CheckResult — tighten once CheckResult lands on main
+  field: monitor :: Actor | Nil = nil
+  field: check :: HealthCheck | Nil = nil
+  field: result :: CheckResult | Nil = nil
   field: previousStatus :: Symbol = #unknown
   field: timestamp :: DateTime = DateTime now
 
   /// Factory — auto-stamps timestamp with DateTime now.
-  class type: t :: Symbol monitor: m :: Actor | nil check: c result: r previousStatus: ps :: Symbol -> MonitorEvent =>
+  class type: t :: Symbol monitor: m :: Actor | Nil check: c :: HealthCheck | Nil result: r :: CheckResult | Nil previousStatus: ps :: Symbol -> MonitorEvent =>
     self
       new: #{
         #type => t,

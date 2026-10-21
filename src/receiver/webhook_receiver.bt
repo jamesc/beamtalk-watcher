@@ -16,8 +16,8 @@
 /// port `0` to bind an ephemeral OS-assigned port and read the resolved
 /// value via the `port` accessor (e.g. in tests).
 typed Actor subclass: WebhookReceiver
-  state: server :: HTTPServer | nil = nil
-  state: alertLog :: AlertLog | nil = nil
+  late state: server :: HTTPServer
+  late state: alertLog :: AlertLog
   state: port :: Integer = 0
 
   /// Spawn a WebhookReceiver bound to `aPort` and start its HTTP server.
@@ -89,8 +89,11 @@ typed Actor subclass: WebhookReceiver
   /// Stop the underlying HTTP server. Safe to call when the server has
   /// already been stopped or was never started.
   shutdown -> WebhookReceiver =>
-    self.server isNil ifFalse: [self.server stop]
-    self.server := nil
+    (self hasField: #server)
+      ifTrue: [
+        self.server stop
+        self clearField: #server
+      ]
     self
 
   /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — stop our

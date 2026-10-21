@@ -47,8 +47,9 @@ typed Actor subclass: CheckRegistry
   state: monitors :: Dictionary(Symbol, Monitor) = #{}
   state: configs :: Dictionary(Symbol, Dictionary) = #{}
   state: restartTimestamps :: Dictionary(Symbol, List(DateTime)) = #{}
-  state: router :: EventListener | nil = nil
-  state: supervisor :: MonitorSupervisor | nil = nil
+  late state: router :: EventListener
+  // Nil again after `shutdown` stops it (callers check `supervisor isNil`).
+  state: supervisor :: MonitorSupervisor | Nil = nil
 
   /// Maximum respawn attempts per check within `restartWindow` seconds
   /// before `monitorExited:reason:` gives up on it. Matches
