@@ -28,6 +28,6 @@
 /// `CheckRegistry`'s Supervision doc comment for the full story.
 ///
 /// See SPEC.md §3, §10.
-DynamicSupervisor(Monitor) subclass: MonitorSupervisor
+typed DynamicSupervisor(Monitor) subclass: MonitorSupervisor
 
-  childClass => Monitor
+  childClass -> Class => Monitor
