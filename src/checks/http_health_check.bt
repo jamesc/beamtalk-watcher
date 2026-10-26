@@ -77,9 +77,12 @@ sealed typed Value subclass: HttpHealthCheck
   /// Apply status and body matchers to a successful HTTP response.
   evaluateResponse: resp :: HTTPResponse -> CheckResult =>
     statusOk := resp status == self.expectedStatus
+    // BT-4172: the response body arrives as raw bytes.
     bodyOk := self.bodyContains isNil ifTrue: [
       true
-    ] ifFalse: [resp body includesSubstring: self.bodyContains]
+    ] ifFalse: [
+      (resp body asStringUnchecked) includesSubstring: self.bodyContains
+    ]
     statusOk
       ifFalse: [
         ^CheckResult
