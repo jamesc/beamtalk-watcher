@@ -416,8 +416,11 @@ typed Actor subclass: Watcher
   /// the actor itself is stopped; `router`/`alertLog` hold no such
   /// resources so a plain `stop` suffices. `shuttingDown` is set first so `childExited:reason:`
   /// doesn't try to resurrect these as if they'd crashed. Safe to call
-  /// multiple times.
+  /// multiple times: a repeat call returns at once on `shuttingDown`, so no
+  /// sub-actor is stopped twice. The slots are deliberately not cleared, so
+  /// the accessors keep naming the (now dead) actors.
   shutdown -> Watcher =>
+    self.shuttingDown ifTrue: [^self]
     self.shuttingDown := true
     (self hasField: #dashboard)
       ifTrue: [
