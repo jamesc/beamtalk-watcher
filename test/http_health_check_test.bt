@@ -101,6 +101,21 @@ TestCase subclass: HttpHealthCheckTest
     self assert: result isFail
     self assert: (result details includesSubstring: "Body did not contain")
 
+  // BT-4172: the response body arrives as raw bytes; the substring
+  // match converts it so bodyContains works across the BT-4170 flip.
+  testBodyContainsMatchesBinaryBody =>
+    check := HttpHealthCheck
+      url: "http://x"
+      expectedStatus: 200
+      bodyContains: "ok"
+      timeout: 1000
+    resp := HTTPResponse new: #{
+      #status => 200,
+      #body => Binary fromBytes: #(111, 107)
+    }
+    result := check evaluateResponse: resp
+    self assert: result isOk
+
   // ----- timeout: server delays longer than the check timeout -----
   testTimeoutProducesFailResult =>
     self.srv := HTTPServer

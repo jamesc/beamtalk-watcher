@@ -85,11 +85,11 @@ TestCase subclass: DashboardTest
 
   testIndexContentTypeIsHtml =>
     resp := (HTTPClient get: self baseUrl) unwrap
-    self assert: (resp body includesSubstring: "<!DOCTYPE html>")
+    self assert: ((resp body asStringUnchecked) includesSubstring: "<!DOCTYPE html>")
 
   testIndexContainsMonitorName =>
     resp := (HTTPClient get: self baseUrl) unwrap
-    self assert: (resp body includesSubstring: "web")
+    self assert: ((resp body asStringUnchecked) includesSubstring: "web")
 
   // ===== GET /monitors =====
   testMonitorsReturns200 =>
@@ -98,7 +98,7 @@ TestCase subclass: DashboardTest
 
   testMonitorsContainsMonitorName =>
     resp := (HTTPClient get: self baseUrl ++ "/monitors") unwrap
-    self assert: (resp body includesSubstring: "web")
+    self assert: ((resp body asStringUnchecked) includesSubstring: "web")
 
   // ===== GET /alerts =====
   testAlertsReturns200 =>
@@ -107,7 +107,7 @@ TestCase subclass: DashboardTest
 
   testAlertsContainsAlertData =>
     resp := (HTTPClient get: self baseUrl ++ "/alerts") unwrap
-    self assert: (resp body includesSubstring: "web")
+    self assert: ((resp body asStringUnchecked) includesSubstring: "web")
 
   // ===== GET /api/status — JSON =====
   testApiStatusReturns200 =>
