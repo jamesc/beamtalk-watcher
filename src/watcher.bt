@@ -81,16 +81,18 @@
 ///
 /// See SPEC.md §12.
 typed Actor subclass: Watcher
-  state: registry :: CheckRegistry | nil = nil
-  state: router :: NotificationRouter | nil = nil
-  state: alertLog :: AlertLog | nil = nil
-  state: receiver :: WebhookReceiver | nil = nil
-  state: dashboard :: Dashboard | nil = nil
+  // The five sub-actors: assigned by `bringUp`, and reassigned only by
+  // `respawn:` when one exits, so each always names the live instance.
+  late state: registry :: CheckRegistry
+  late state: router :: NotificationRouter
+  late state: alertLog :: AlertLog
+  late state: receiver :: WebhookReceiver
+  late state: dashboard :: Dashboard
   state: config :: Dictionary = #{}
   // The `MonitorSupervisor` handed to the current `registry`. The
   // registry stops it on `shutdown`; `configureRegistry` keeps this
   // reference so it can stop it after a registry crash too.
-  state: monitorSupervisor :: MonitorSupervisor | nil = nil
+  late state: monitorSupervisor :: MonitorSupervisor
   // Set at the start of `shutdown` so `childExited:reason:` doesn't treat
   // the deliberate teardown of alertLog/router (plain `Actor>>stop`, which
   // also fires `onExit:`) as a crash to recover from.
@@ -169,8 +171,8 @@ typed Actor subclass: Watcher
   /// `MonitorSupervisor` of its own, replays the configured checks, and
   /// arms crash detection.
   internal configureRegistry -> Watcher =>
-    self.monitorSupervisor isNil
-      ifFalse: [
+    (self hasField: #monitorSupervisor)
+      ifTrue: [
         // A registry that crashed with an error ran `terminate:` and
         // already stopped it; a killed one did not.
         [self.monitorSupervisor stop] on: Error do: [:e | nil]
@@ -317,19 +319,19 @@ typed Actor subclass: Watcher
   // ===== Accessors =====
 
   /// The CheckRegistry — primary entry point for adding and querying checks.
-  registry -> CheckRegistry | nil => self.registry
+  registry -> CheckRegistry => self.registry
 
   /// The NotificationRouter — add outbound channels via `addChannel:`.
-  router -> NotificationRouter | nil => self.router
+  router -> NotificationRouter => self.router
 
   /// The AlertLog — query received webhook alerts via `recent:`.
-  alertLog -> AlertLog | nil => self.alertLog
+  alertLog -> AlertLog => self.alertLog
 
   /// The WebhookReceiver — bound HTTP server for inbound webhooks.
-  receiver -> WebhookReceiver | nil => self.receiver
+  receiver -> WebhookReceiver => self.receiver
 
   /// The Dashboard — HTTP server with the web UI and JSON API.
-  dashboard -> Dashboard | nil => self.dashboard
+  dashboard -> Dashboard => self.dashboard
 
   /// The configuration dictionary supplied to `startWith:`.
   config -> Dictionary => self.config
@@ -362,9 +364,9 @@ typed Actor subclass: Watcher
   subsystemHealth -> Dictionary =>
     #{
       #subsystems => self subsystemHealthList,
-      #checks => (self.registry isNil ifTrue: [
-        List withAll: #()
-      ] ifFalse: [self.registry restartHealth])
+      #checks => ((self hasField: #registry) ifTrue: [
+        self.registry restartHealth
+      ] ifFalse: [List withAll: #()])
     }
 
   /// Health entries for the 5 fixed sub-actor roles, in `bringUp:` order.
@@ -378,7 +380,9 @@ typed Actor subclass: Watcher
 
   /// Alive/restart-count snapshot for a single sub-actor role.
   internal healthFor: role :: Symbol -> Dictionary =>
-    actor := self actorFor: role
+    // Each role names its own slot; a partial `bringUp` leaves later
+    // ones unassigned.
+    actor := (self hasField: role) ifTrue: [self actorFor: role] ifFalse: [nil]
     #{
       #name => role,
       #alive => (actor isNil ifTrue: [false] ifFalse: [actor isAlive]),
@@ -412,24 +416,27 @@ typed Actor subclass: Watcher
   /// the actor itself is stopped; `router`/`alertLog` hold no such
   /// resources so a plain `stop` suffices. `shuttingDown` is set first so `childExited:reason:`
   /// doesn't try to resurrect these as if they'd crashed. Safe to call
-  /// multiple times.
+  /// multiple times: a repeat call returns at once on `shuttingDown`, so no
+  /// sub-actor is stopped twice. The slots are deliberately not cleared, so
+  /// the accessors keep naming the (now dead) actors.
   shutdown -> Watcher =>
+    self.shuttingDown ifTrue: [^self]
     self.shuttingDown := true
-    self.dashboard isNil
-      ifFalse: [
+    (self hasField: #dashboard)
+      ifTrue: [
         self.dashboard shutdown
         self.dashboard stop
       ]
-    self.receiver isNil
-      ifFalse: [
+    (self hasField: #receiver)
+      ifTrue: [
         self.receiver shutdown
         self.receiver stop
       ]
-    self.registry isNil
-      ifFalse: [
+    (self hasField: #registry)
+      ifTrue: [
         self.registry shutdown
         self.registry stop
       ]
-    self.router isNil ifFalse: [self.router stop]
-    self.alertLog isNil ifFalse: [self.alertLog stop]
+    (self hasField: #router) ifTrue: [self.router stop]
+    (self hasField: #alertLog) ifTrue: [self.alertLog stop]
     self

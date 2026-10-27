@@ -21,11 +21,13 @@
 ///
 /// See SPEC.md section 11.
 typed Actor subclass: Dashboard
-  state: server :: HTTPServer | nil = nil
-  state: registry :: CheckRegistry | nil = nil
-  state: alertLog :: AlertLog | nil = nil
-  state: healthReporter :: HealthReporter | nil = nil
-  state: router :: NotificationRouter | nil = nil
+  late state: server :: HTTPServer
+  late state: registry :: CheckRegistry
+  late state: alertLog :: AlertLog
+  // Optional: the direct/test factory `start:registry:alertLog:` attaches
+  // none, and `apiHealth:` answers `{"available": false}` without one.
+  state: healthReporter :: HealthReporter | Nil = nil
+  late state: router :: NotificationRouter
   state: port :: Integer = 0
 
   /// Spawn a Dashboard on `aPort`, wired to the given registry and alert log.
@@ -432,8 +434,11 @@ typed Actor subclass: Dashboard
 
   /// Stop the underlying HTTP server.
   shutdown -> Dashboard =>
-    self.server isNil ifFalse: [self.server stop]
-    self.server := nil
+    (self hasField: #server)
+      ifTrue: [
+        self.server stop
+        self clearField: #server
+      ]
     self
 
   /// OTP calls this on a graceful stop (e.g. `Actor>>stop`) — stop our
