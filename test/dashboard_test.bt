@@ -136,7 +136,7 @@ TestCase subclass: DashboardTest
 
   testApiHealthReturnsUnavailableWithoutReporter =>
     resp := (HTTPClient get: self baseUrl ++ "/api/health") unwrap
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "available") equals: false
 
   // ===== GET /api/alerts — JSON =====
@@ -163,7 +163,7 @@ TestCase subclass: DashboardTest
 
   testApiMonitorReturnsParseableJson =>
     resp := (HTTPClient get: self baseUrl ++ "/api/monitors/web") unwrap
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "name") equals: "web"
 
   testApiMonitorMissingReturns404 =>
@@ -172,7 +172,7 @@ TestCase subclass: DashboardTest
 
   testApiMonitorMissing404IsJson =>
     resp := (HTTPClient get: self baseUrl ++ "/api/monitors/nonexistent") unwrap
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "error") equals: "monitor not found"
 
   // ===== GET /static/*path =====
@@ -209,13 +209,13 @@ TestCase subclass: DashboardTest
 
   testSilenceReturnsSilencedTrueAndDefaultSeconds =>
     resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "") unwrap
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "silenced") equals: true
     self assert: (parsed at: "seconds") equals: 3600
 
   testSilenceHonorsSecondsInBody =>
     resp := (HTTPClient post: self baseUrl ++ "/api/monitors/web/silence" body: "\{""seconds"":60}") unwrap
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "seconds") equals: 60
 
   testSilenceActuallySilencesTheRouter =>

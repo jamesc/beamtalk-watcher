@@ -338,7 +338,7 @@ TestCase subclass: WatcherTest
     url := "http://localhost:" ++ self.watcher dashboard port printString ++ "/api/health"
     resp := (HTTPClient get: url) unwrap
     self assert: resp status equals: 200
-    parsed := (Json parse: resp body) unwrap
+    parsed :: Dictionary(String, Any) := (Json parse: resp body) unwrap
     self assert: (parsed at: "available") equals: true
     self assert: (parsed at: "subsystems") size equals: 5
 

@@ -53,9 +53,6 @@ TestCase subclass: WebhookReceiverTest
   testValidWebhookBodyAcceptedFlag =>
     url := self baseUrl ++ "/webhook"
     resp := (HTTPClient post: url body: self samplePayload) unwrap
-    // JsonValue's Dictionary member is unparameterized; this payload is
-    // always a JSON object here.
-    @expect type
     parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
     self assert: (parsed at: "accepted")
 
@@ -78,9 +75,6 @@ TestCase subclass: WebhookReceiverTest
   testInvalidJsonErrorBody =>
     url := self baseUrl ++ "/webhook"
     resp := (HTTPClient post: url body: "\{ broken") unwrap
-    // JsonValue's Dictionary member is unparameterized; this payload is
-    // always a JSON object here.
-    @expect type
     parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
     self assert: (parsed at: "error") equals: "invalid JSON"
 
@@ -98,8 +92,5 @@ TestCase subclass: WebhookReceiverTest
   testHealthBodyShape =>
     url := self baseUrl ++ "/health"
     resp := (HTTPClient get: url) unwrap
-    // JsonValue's Dictionary member is unparameterized; this payload is
-    // always a JSON object here.
-    @expect type
     parsed :: Dictionary(String, Any) := (resp bodyAsJson) unwrap
     self assert: (parsed at: "status") equals: "ok"
