@@ -1,0 +1,144 @@
+# Copyright 2026 beamtalk_watcher authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Edge Canary
+
+# ci.yml installs the rolling `--edge` compiler, so a change on beamtalk main can
+# turn this repo red with no commit here (BT-4173's String/Binary flip did exactly
+# that). This runs the same checks daily, and when they fail has Claude read the
+# logs, find the compiler change responsible, and file (or update) a Linear issue.
+# Triage only: no code, no pushes, no re-runs.
+#
+# Secrets (Claude OAuth, Linear key) reach the triage job only on a schedule or a
+# manual dispatch of this repo, never on pull_request runs.
+#
+# Requires the LINEAR_API_KEY repository secret (CLAUDE_CODE_OAUTH_TOKEN is already
+# used by claude-review.yml). Test with: gh workflow run edge-canary.yml
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: edge-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Build and test on edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+
+      - name: Install Beamtalk (edge)
+        run: |
+          mkdir -p canary
+          curl -fsSL https://beamtalk.dev/install.sh | sudo sh -s -- --edge --prefix /usr/local
+          beamtalk --version | tee canary/beamtalk-version.txt
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # Same steps as ci.yml (lint stays advisory there, so it is not part of the
+      # canary). Each logs to canary/ so the triage job gets the evidence.
+      - name: Format check
+        run: just fmt 2>&1 | tee canary/fmt.log; exit "${PIPESTATUS[0]}"
+        shell: bash
+
+      - name: Build
+        run: just build 2>&1 | tee canary/build.log; exit "${PIPESTATUS[0]}"
+        shell: bash
+
+      - name: Test
+        run: just test 2>&1 | tee canary/test.log; exit "${PIPESTATUS[0]}"
+        shell: bash
+
+      - name: Upload canary logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: canary-logs
+          path: canary/
+          if-no-files-found: warn
+          retention-days: 14
+
+  triage:
+    name: Triage edge breakage
+    needs: canary
+    if: failure() && needs.canary.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write       # OIDC token exchange for the OAuth subscription auth
+      contents: read
+      actions: read         # read earlier canary runs and their logs
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download canary logs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: canary-logs
+          path: triage/logs
+
+      # Everything the agent needs up front, so it needs no more than read-only gh:
+      # this run's job list and the recent canary history (to find the last green
+      # run and, from its logs, the compiler build that last worked).
+      - name: Collect evidence
+        run: |
+          gh run view "${RUN_ID}" --json jobs,conclusion,headSha,url,createdAt > triage/run.json
+          gh run list --repo "${REPO}" --workflow edge-canary.yml \
+            --json databaseId,headSha,conclusion,event,createdAt,url --limit 30 \
+            > triage/canary-runs.json || true
+          find triage -type f | sort
+
+      - name: Load triage prompt
+        id: load_prompt
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          prompt_file="${RUNNER_TEMP}/edge-canary-prompt.txt"
+          sed -e "s|@RUN_ID@|${RUN_ID}|g" \
+              -e "s|@RUN_URL@|${RUN_URL}|g" \
+              -e "s|@SHA@|${SHA}|g" \
+              -e "s|@REPO@|${REPO}|g" \
+              .github/claude-edge-canary-prompt.md > "${prompt_file}"
+          {
+            echo 'prompt<<__BTPROMPTEOF__'
+            cat "${prompt_file}"
+            echo '__BTPROMPTEOF__'
+          } >> "$GITHUB_OUTPUT"
+
+      # Reuses the composite action from the beamtalk repo (public) instead of
+      # copying it. Pinned to the commit that last changed it. Trust boundary: the
+      # logs are untrusted, so tools are read-only plus the Linear issue tools; the
+      # guarantee against writes is the read-only github.token passed explicitly.
+      - name: Triage with Claude
+        uses: jamesc/beamtalk/.github/actions/claude-triage@f6fcaf0d55fab6a815ff948a6ae7a25858885481
+        with:
+          claude-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          linear-api-key: ${{ secrets.LINEAR_API_KEY }}
+          github-token: ${{ github.token }}
+          prompt: ${{ steps.load_prompt.outputs.prompt }}
+          max-turns: "40"
+          artifact-name: edge-canary-triage-${{ github.run_id }}
+          allowed-tools: "Read,Grep,Glob,Bash(gh run list:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/actions/runs/:*),Bash(gh api repos/jamesc/beamtalk/commits:*),Bash(gh api repos/jamesc/beamtalk-http/commits:*),Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__linear__list_issues,mcp__linear__get_issue,mcp__linear__list_comments,mcp__linear__save_issue,mcp__linear__save_comment,mcp__linear__list_issue_labels,mcp__linear__list_issue_statuses,mcp__linear__list_teams"
