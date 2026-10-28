@@ -93,7 +93,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # No artifact exists when the canary died before writing any log (for example
+      # the install script failing on a network blip); the agent then works from
+      # run.json alone, which is the documented infrastructure path.
       - name: Download canary logs
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: canary-logs
@@ -130,8 +134,11 @@ jobs:
 
       # Reuses the composite action from the beamtalk repo (public) instead of
       # copying it. Pinned to the commit that last changed it. Trust boundary: the
-      # logs are untrusted, so tools are read-only plus the Linear issue tools; the
-      # guarantee against writes is the read-only github.token passed explicitly.
+      # logs are untrusted, so tools are read-only plus the Linear issue tools. Run
+      # reads go through `gh run list|view`, whose prefixes cannot reach cancel,
+      # rerun or delete; the `gh api` entries are limited to commit listings of
+      # other repos, which this job's token cannot write to. The token (read-only,
+      # passed explicitly) remains the backstop, not the only layer.
       - name: Triage with Claude
         uses: jamesc/beamtalk/.github/actions/claude-triage@f6fcaf0d55fab6a815ff948a6ae7a25858885481
         with:
@@ -141,4 +148,4 @@ jobs:
           prompt: ${{ steps.load_prompt.outputs.prompt }}
           max-turns: "40"
           artifact-name: edge-canary-triage-${{ github.run_id }}
-          allowed-tools: "Read,Grep,Glob,Bash(gh run list:*),Bash(gh run view:*),Bash(gh api repos/${{ github.repository }}/actions/runs/:*),Bash(gh api repos/jamesc/beamtalk/commits:*),Bash(gh api repos/jamesc/beamtalk-http/commits:*),Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__linear__list_issues,mcp__linear__get_issue,mcp__linear__list_comments,mcp__linear__save_issue,mcp__linear__save_comment,mcp__linear__list_issue_labels,mcp__linear__list_issue_statuses,mcp__linear__list_teams"
+          allowed-tools: "Read,Grep,Glob,Bash(gh run list:*),Bash(gh run view:*),Bash(gh api repos/jamesc/beamtalk/commits:*),Bash(gh api repos/jamesc/beamtalk-http/commits:*),Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__linear__list_issues,mcp__linear__get_issue,mcp__linear__list_comments,mcp__linear__save_issue,mcp__linear__save_comment,mcp__linear__list_issue_labels,mcp__linear__list_issue_statuses,mcp__linear__list_teams"

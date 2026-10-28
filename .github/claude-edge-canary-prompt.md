@@ -7,7 +7,8 @@ compiler, the stdlib, or a dependency (for example the `http` package, jamesc/be
 
 - Run: @RUN_URL@ (id @RUN_ID@), commit @SHA@ (checked out, with full history)
 - Already fetched under `triage/`: `run.json` (jobs and steps of this run), `canary-runs.json` (the last
-  30 runs of this workflow: id, sha, conclusion, event, createdAt, url) and `logs/` from this run:
+  30 runs of this workflow: id, sha, conclusion, event, createdAt, url) and `logs/` from this run (it can be empty or missing when the canary failed before writing any log, such as
+  an install-script network failure; then work from `run.json`'s failed step):
   `beamtalk-version.txt` (the edge compiler version installed), and `fmt.log`, `build.log`, `test.log`
   (the step that failed stopped the later ones, so some may be missing).
 
@@ -16,7 +17,7 @@ You triage and file only. You never push code, open PRs, re-run workflows, or ru
 ## Tools
 
 Read files with Read, Grep and Glob. Shell is limited to `gh run list`, `gh run view`,
-`gh api repos/@REPO@/actions/runs/...`, `gh api repos/jamesc/beamtalk/commits...`,
+`gh api repos/jamesc/beamtalk/commits...`,
 `gh api repos/jamesc/beamtalk-http/commits...` (GET only; the token is read-only), `git log`, `git show` and
 `ls`. Pipes, `&&`, `;`, redirections and `VAR=value` prefixes are denied; run each command on its own.
 Linear is available through its MCP tools. There is no write tool for files: you report only through Linear.
