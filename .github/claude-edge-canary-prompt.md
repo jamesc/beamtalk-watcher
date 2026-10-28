@@ -8,7 +8,10 @@ compiler, the stdlib, or a dependency (for example the `http` package, jamesc/be
 - Run: @RUN_URL@ (id @RUN_ID@), commit @SHA@ (checked out, with full history)
 - Already fetched under `triage/`: `run.json` (jobs and steps of this run), `canary-runs.json` (the last
   30 runs of this workflow: id, sha, conclusion, event, createdAt, url) and `logs/` from this run (it can be empty or missing when the canary failed before writing any log, such as
-  an install-script network failure; then work from `run.json`'s failed step):
+  an install-script network failure; then work from `run.json`'s failed step). `triage/logs-download-outcome.txt`
+  says whether downloading them worked (`success` or `failure`): if it says `failure` but `run.json` shows the
+  build or test step ran, the download failed for a transient reason, so say the logs were unavailable rather
+  than that none were written:
   `beamtalk-version.txt` (the edge compiler version installed), and `fmt.log`, `build.log`, `test.log`
   (the step that failed stopped the later ones, so some may be missing).
 

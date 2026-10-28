@@ -97,6 +97,7 @@ jobs:
       # the install script failing on a network blip); the agent then works from
       # run.json alone, which is the documented infrastructure path.
       - name: Download canary logs
+        id: logs
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -107,7 +108,12 @@ jobs:
       # this run's job list and the recent canary history (to find the last green
       # run and, from its logs, the compiler build that last worked).
       - name: Collect evidence
+        env:
+          DOWNLOAD_OUTCOME: ${{ steps.logs.outcome }}
         run: |
+          # The download action creates nothing when the artifact is missing.
+          mkdir -p triage/logs
+          echo "${DOWNLOAD_OUTCOME}" > triage/logs-download-outcome.txt
           gh run view "${RUN_ID}" --json jobs,conclusion,headSha,url,createdAt > triage/run.json
           gh run list --repo "${REPO}" --workflow edge-canary.yml \
             --json databaseId,headSha,conclusion,event,createdAt,url --limit 30 \
