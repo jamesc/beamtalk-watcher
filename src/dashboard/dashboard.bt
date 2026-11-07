@@ -103,9 +103,14 @@ typed Actor subclass: Dashboard
           get: "/api/monitors/:name" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
             self apiMonitor: req
           ]);
-          post: "/api/monitors/:name/silence" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
-            self silenceMonitor: req
-          ]);
+          post: "/api/monitors/:name/silence" handler: (PlugChain
+            chain: #(logging, monitorExists)
+            handler: [:req |
+              // Read the body here, in the connection process, and pass
+              // it in: `req body` inside `silenceMonitor:body:` would run
+              // in this actor's process and answer the empty buffered body.
+              self silenceMonitor: req body: req body
+            ]);
           post: "/api/monitors/:name/unsilence" handler: (PlugChain chain: #(logging, monitorExists) handler: [:req |
             self unsilenceMonitor: req
           ]);
@@ -320,11 +325,11 @@ typed Actor subclass: Dashboard
   /// 3600). See `NotificationRouter`'s class doc comment for what
   /// silencing does and doesn't affect. `MonitorExistsPlug` (see
   /// `buildRouter`) guarantees `:name` is registered before this runs.
-  silenceMonitor: req :: HTTPRequest -> HTTPResponse =>
+  silenceMonitor: req :: HTTPRequest body: rawBody -> HTTPResponse =>
     name := req param: "name"
     nameSymbol := name asAtom
     monitor := self.registry monitor: nameSymbol
-    seconds := self silenceSecondsFrom: req body
+    seconds := self silenceSecondsFrom: rawBody
     self.router silence: monitor checkName for: seconds
     HTTPResponse
       new: #{
