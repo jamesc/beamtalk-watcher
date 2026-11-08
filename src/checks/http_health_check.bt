@@ -71,7 +71,7 @@ sealed typed Value subclass: HttpHealthCheck
   // ===== Private helpers =====
 
   /// Build a `CheckResult fail` from an HTTP-layer error (timeout, refused, ...).
-  errorResultFor: err :: Error -> CheckResult =>
+  errorResultFor: err :: Object -> CheckResult =>
     CheckResult fail: self name details: "HTTP error: " ++ err printString
 
   /// Apply status and body matchers to a successful HTTP response.
