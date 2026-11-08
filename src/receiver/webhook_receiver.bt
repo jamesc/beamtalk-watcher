@@ -69,8 +69,11 @@ typed Actor subclass: WebhookReceiver
   /// invalid JSON). Takes the pre-read body: reading `req body` here
   /// would run outside the connection process (`#not_owner`) and answer
   /// the empty buffered body.
-  handleWebhook: req :: HTTPRequest body: rawBody -> HTTPResponse =>
-    parsed :: Result(Dictionary) := Json parse: rawBody
+  handleWebhook: _req :: HTTPRequest body: rawBody :: String | Binary -> HTTPResponse =>
+    // Non-UTF-8 bodies arrive as Binary and can't be JSON text — treat
+    // them like any other unparseable body (400 below).
+    text :: String := (rawBody isKindOf: String) ifTrue: [rawBody] ifFalse: [""]
+    parsed :: Result(Dictionary) := Json parse: text
     parsed
       ifOk: [:data |
         self.alertLog record: (Alert fromWebhook: data)

@@ -325,7 +325,7 @@ typed Actor subclass: Dashboard
   /// 3600). See `NotificationRouter`'s class doc comment for what
   /// silencing does and doesn't affect. `MonitorExistsPlug` (see
   /// `buildRouter`) guarantees `:name` is registered before this runs.
-  silenceMonitor: req :: HTTPRequest body: rawBody -> HTTPResponse =>
+  silenceMonitor: req :: HTTPRequest body: rawBody :: String | Binary -> HTTPResponse =>
     name := req param: "name"
     nameSymbol := name asAtom
     monitor := self.registry monitor: nameSymbol
@@ -357,8 +357,11 @@ typed Actor subclass: Dashboard
   /// Parse `{"seconds": N}` from a silence request body, defaulting to
   /// 3600 (1 hour) when the body is empty, isn't valid JSON, or omits
   /// `"seconds"`.
-  internal silenceSecondsFrom: body :: String -> Integer =>
-    parsed :: Result(Dictionary) := Json parse: body
+  internal silenceSecondsFrom: body :: String | Binary -> Integer =>
+    // Non-UTF-8 bodies arrive as Binary and can't be JSON text — fall
+    // through to the 3600 default like any other unparseable body.
+    text :: String := (body isKindOf: String) ifTrue: [body] ifFalse: [""]
+    parsed :: Result(Dictionary) := Json parse: text
     parsed ifOk: [:data |
       data at: "seconds" ifAbsent: [3600]
     ] ifError: [:err | 3600]
