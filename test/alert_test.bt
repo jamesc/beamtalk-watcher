@@ -64,7 +64,7 @@ TestCase subclass: AlertTest
   // --- fromWebhook: via Json round-trip (simulates real webhook path) ---
   testFromWebhookViaJsonRoundTrip =>
     json := Json generate: self sampleAlertPayload
-    data := (Json parse: json) unwrap
+    data :: Dictionary := (Json parse: json) unwrap
     alert := Alert fromWebhook: data
     self assert: alert type equals: "alert"
     self assert: alert checkName equals: "HTTP http://localhost:3000/health"

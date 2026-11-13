@@ -72,7 +72,7 @@ typed Actor subclass: WebhookReceiver
   handleWebhook: _req :: HTTPRequest body: rawBody :: String | Binary -> HTTPResponse =>
     // Non-UTF-8 bodies arrive as Binary and can't be JSON text — treat
     // them like any other unparseable body (400 below).
-    text :: String := (rawBody isKindOf: String) ifTrue: [rawBody] ifFalse: [""]
+    text := (rawBody isKindOf: String) ifTrue: [rawBody] ifFalse: [""]
     parsed :: Result(Dictionary) := Json parse: text
     parsed
       ifOk: [:data |
