@@ -360,7 +360,7 @@ typed Actor subclass: Dashboard
   internal silenceSecondsFrom: body :: String | Binary -> Integer =>
     // Non-UTF-8 bodies arrive as Binary and can't be JSON text — fall
     // through to the 3600 default like any other unparseable body.
-    text :: String := (body isKindOf: String) ifTrue: [body] ifFalse: [""]
+    text := (body isKindOf: String) ifTrue: [body] ifFalse: [""]
     parsed :: Result(Dictionary) := Json parse: text
     parsed ifOk: [:data |
       data at: "seconds" ifAbsent: [3600]
