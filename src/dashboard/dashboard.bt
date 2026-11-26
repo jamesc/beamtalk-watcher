@@ -164,7 +164,10 @@ typed Actor subclass: Dashboard
           "green"
         ] ifFalse: [status == #fail ifTrue: ["red"] ifFalse: ["grey"]]
         lastResult := s at: #lastResult
-        details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+        details := lastResult match: [
+          nil -> "";
+          r :: CheckResult -> r details
+        ]
         "<tr class="""
           ++ color
           ++ """>"
@@ -199,7 +202,10 @@ typed Actor subclass: Dashboard
       collect: [:a |
         "<div class=""alert-item"">"
           ++ "<span class=""timestamp"">"
-          ++ (a timestamp isNil ifTrue: [""] ifFalse: [a timestamp printString])
+          ++ (a timestamp match: [
+            nil -> "";
+            t -> t printString
+          ])
           ++ "</span>"
           ++ "<strong>"
           ++ a checkName
@@ -225,7 +231,10 @@ typed Actor subclass: Dashboard
     entries := statuses
       collect: [:s |
         lastResult := s at: #lastResult
-        details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+        details := lastResult match: [
+          nil -> "";
+          r :: CheckResult -> r details
+        ]
         #{
           "name" => (s at: #name) displayString,
           "status" => (s at: #status) displayString,
@@ -286,9 +295,10 @@ typed Actor subclass: Dashboard
           "status" => a status,
           "details" => a details,
           "target" => a target,
-          "timestamp" => (a timestamp isNil ifTrue: [
-            nil
-          ] ifFalse: [a timestamp printString])
+          "timestamp" => (a timestamp match: [
+            nil -> nil;
+            t -> t printString
+          ])
         }
       ]
     HTTPResponse
@@ -307,7 +317,10 @@ typed Actor subclass: Dashboard
     monitor := self.registry monitor: nameSymbol
     status := monitor status
     lastResult := monitor lastResult
-    details := lastResult isNil ifTrue: [""] ifFalse: [lastResult details]
+    details := lastResult match: [
+      nil -> "";
+      r :: CheckResult -> r details
+    ]
     data := #{
       "name" => name,
       "status" => status displayString,
@@ -360,7 +373,10 @@ typed Actor subclass: Dashboard
   internal silenceSecondsFrom: body :: String | Binary -> Integer =>
     // Non-UTF-8 bodies arrive as Binary and can't be JSON text — fall
     // through to the 3600 default like any other unparseable body.
-    text := (body isKindOf: String) ifTrue: [body] ifFalse: [""]
+    text := body match: [
+      s :: String -> s;
+      _ -> ""
+    ]
     parsed :: Result(Dictionary) := Json parse: text
     parsed ifOk: [:data |
       data at: "seconds" ifAbsent: [3600]
