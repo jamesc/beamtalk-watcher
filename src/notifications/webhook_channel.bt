@@ -76,10 +76,14 @@ typed Actor subclass: WebhookChannel
 
   /// Build a JSON string from a MonitorEvent matching the SPEC §6 schema.
   buildPayload: event :: MonitorEvent -> String =>
-    status := event result isNil ifTrue: [
-      "unknown"
-    ] ifFalse: [event result status printString]
-    details := event result isNil ifTrue: [""] ifFalse: [event result details]
+    status := event result match: [
+      nil -> "unknown";
+      r :: CheckResult -> r status printString
+    ]
+    details := event result match: [
+      nil -> "";
+      r :: CheckResult -> r details
+    ]
     Json
       generate: #{
         "type" => event type printString,
