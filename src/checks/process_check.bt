@@ -41,7 +41,7 @@ sealed typed Value subclass: ProcessCheck
       ^CheckResult fail: self name details: "Process name not set"
     ]
     atomName := self.processName match: [
-      name :: String -> name asAtom;
+      s :: String -> s asAtom;
       other -> other
     ]
     pid := self whereisPid: atomName
